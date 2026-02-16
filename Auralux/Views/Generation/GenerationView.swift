@@ -22,6 +22,7 @@ struct GenerationView: View {
                         .font(.body)
                         .frame(minHeight: 100)
                         .accessibilityLabel("Music prompt")
+                        .accessibilityIdentifier("prompt-editor")
                 }
 
                 TagEditorView(tags: viewModel.tags, draftTag: $tagText) { tag in
@@ -39,11 +40,13 @@ struct GenerationView: View {
                     }
                     .keyboardShortcut("g", modifiers: [.command])
                     .disabled(viewModel.state.isBusy || !engineReady)
+                    .accessibilityIdentifier("generate-button")
 
                     Button("Cancel") {
                         viewModel.cancel()
                     }
                     .disabled(!viewModel.state.isBusy)
+                    .accessibilityIdentifier("cancel-button")
 
                     Spacer()
 
@@ -52,6 +55,7 @@ struct GenerationView: View {
                         VStack(alignment: .trailing, spacing: 4) {
                             ProgressView(value: viewModel.progress)
                                 .frame(width: 200)
+                                .accessibilityIdentifier("generation-progress")
                             if !viewModel.progressMessage.isEmpty {
                                 Text(viewModel.progressMessage)
                                     .font(.caption2)
@@ -62,9 +66,11 @@ struct GenerationView: View {
                     case .completed:
                         Label("Done", systemImage: "checkmark.circle.fill")
                             .foregroundStyle(.green)
+                            .accessibilityIdentifier("generation-status")
                     case .failed(let message):
                         Label(message, systemImage: "exclamationmark.triangle.fill")
                             .foregroundStyle(.red)
+                            .accessibilityIdentifier("generation-status")
                     case .idle:
                         EmptyView()
                     }

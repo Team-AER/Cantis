@@ -162,7 +162,14 @@ final class GenerationViewModel {
                         generationID: jobID,
                         audioFilePath: storedPath
                     )
+
+                    // Persist first, then yield so SwiftData change
+                    // notifications settle before we touch Observable
+                    // properties that trigger the PlayerView (and its
+                    // AVAudioEngine setup).
                     try historyService.insert(track)
+                    await Task.yield()
+
                     lastTrack = track
                     currentJobID = nil
                     return

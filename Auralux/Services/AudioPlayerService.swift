@@ -55,12 +55,14 @@ final class AudioPlayerService {
         guard format.sampleRate > 0 else { return }
 
         mixerNode.installTap(onBus: 0, bufferSize: bufferSize, format: format) { [weak self] buffer, _ in
+            guard let self else { return }
             guard let channelData = buffer.floatChannelData?[0] else { return }
             let frameLength = Int(buffer.frameLength)
             let samples = Array(UnsafeBufferPointer(start: channelData, count: frameLength))
             let mags = AudioFFT.magnitudes(samples: samples, fftSize: size)
             Task { @MainActor [weak self] in
-                self?.spectrumMagnitudes = mags
+                guard let self, self.isPlaying else { return }
+                self.spectrumMagnitudes = mags
             }
         }
     }
@@ -167,10 +169,9 @@ final class AudioPlayerService {
 
     private func startProgressUpdates() {
         progressTask?.cancel()
-        progressTask = Task { [weak self] in
-            guard let self else { return }
+        progressTask = Task {
             while !Task.isCancelled {
-                self.updateProgress()
+                updateProgress()
                 try? await Task.sleep(for: .milliseconds(50))
             }
         }

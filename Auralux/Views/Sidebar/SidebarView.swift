@@ -5,11 +5,13 @@ struct SidebarView: View {
     @Environment(SidebarViewModel.self) private var viewModel
 
     var body: some View {
-        List(selection: Bindable(viewModel).selectedSection) {
+        @Bindable var viewModel = viewModel
+        List(selection: $viewModel.selectedSection) {
             Section("Workspace") {
                 ForEach(SidebarSection.allCases) { section in
-                    Label(section.title, systemImage: icon(for: section))
-                        .tag(section as SidebarSection?)
+                    NavigationLink(value: section) {
+                        Label(section.title, systemImage: icon(for: section))
+                    }
                 }
             }
 

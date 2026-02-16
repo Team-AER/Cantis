@@ -10,6 +10,7 @@ struct PlayerView: View {
             VStack(alignment: .leading, spacing: 6) {
                 Text(track.title)
                     .font(.title2.weight(.semibold))
+                    .accessibilityIdentifier("track-title")
                 Text(track.createdAt.formatted(date: .abbreviated, time: .shortened))
                     .foregroundStyle(.secondary)
             }
@@ -38,6 +39,7 @@ struct PlayerView: View {
                     viewModel.playPause()
                 }
                 .keyboardShortcut(.space, modifiers: [])
+                .accessibilityIdentifier("play-pause-button")
 
                 Button("Stop") {
                     viewModel.stop()
@@ -58,10 +60,12 @@ struct PlayerView: View {
             Spacer(minLength: 0)
         }
         .padding(20)
-        .onAppear {
-            viewModel.load(path: track.audioFilePath)
-        }
-        .onChange(of: track.id) { _, _ in
+        .task(id: track.id) {
+            // Defer audio engine init to the next run-loop turn so it
+            // doesn't collide with the SwiftUI/SwiftData update cycle
+            // that surfaces this view (causes _dispatch_assert_queue_fail).
+            try? await Task.sleep(for: .milliseconds(50))
+            guard !Task.isCancelled else { return }
             viewModel.load(path: track.audioFilePath)
         }
     }

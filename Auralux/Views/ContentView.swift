@@ -71,20 +71,22 @@ struct ContentView: View {
         }
         .toolbar {
             ToolbarItem(placement: .automatic) {
-                HStack(spacing: 12) {
-                    Button {
-                        openWindow(id: "log-viewer")
-                    } label: {
-                        Image(systemName: "terminal")
-                            .help("Show Logs (Cmd+Opt+L)")
-                    }
-                    .keyboardShortcut("l", modifiers: [.command, .option])
-
-                    EngineStatusView()
-
-                    Text("Auralux")
-                        .font(.headline)
+                Button {
+                    openWindow(id: "log-viewer")
+                } label: {
+                    Image(systemName: "terminal")
                 }
+                .help("Show Logs (Cmd+Opt+L)")
+                .keyboardShortcut("l", modifiers: [.command, .option])
+            }
+
+            ToolbarItem(placement: .automatic) {
+                EngineStatusView()
+            }
+
+            ToolbarItem(placement: .automatic) {
+                Text("Auralux")
+                    .font(.headline)
             }
         }
     }

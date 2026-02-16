@@ -164,13 +164,16 @@ final class XPCServerLauncher: ServerLauncher {
 actor InferenceService {
     private let baseURL: URL
     private let launcher: ServerLauncher
+    private let session: URLSession
 
     init(
         baseURL: URL = AppConstants.inferenceBaseURL,
-        launcher: ServerLauncher = ProcessServerLauncher()
+        launcher: ServerLauncher = ProcessServerLauncher(),
+        session: URLSession = .shared
     ) {
         self.baseURL = baseURL
         self.launcher = launcher
+        self.session = session
     }
 
     private func logInfo(_ msg: String) {
@@ -214,7 +217,7 @@ actor InferenceService {
         request.timeoutInterval = 5
 
         do {
-            let (_, response) = try await URLSession.shared.data(for: request)
+            let (_, response) = try await session.data(for: request)
             guard let http = response as? HTTPURLResponse else { return false }
             return (200...299).contains(http.statusCode)
         } catch {
@@ -227,7 +230,7 @@ actor InferenceService {
         request.timeoutInterval = 5
 
         do {
-            let (data, response) = try await URLSession.shared.data(for: request)
+            let (data, response) = try await session.data(for: request)
             guard let http = response as? HTTPURLResponse,
                   (200...299).contains(http.statusCode) else { return nil }
             return try JSONDecoder().decode(HealthResponse.self, from: data)
@@ -249,7 +252,7 @@ actor InferenceService {
         request.timeoutInterval = 30
         request.httpBody = try JSONEncoder().encode(requestBody)
 
-        let (data, response) = try await URLSession.shared.data(for: request)
+        let (data, response) = try await session.data(for: request)
         guard let http = response as? HTTPURLResponse else { throw InferenceError.invalidResponse }
         guard (200...299).contains(http.statusCode) else {
             logError("generate failed: HTTP \(http.statusCode)")
@@ -264,7 +267,7 @@ actor InferenceService {
     func poll(jobID: String) async throws -> GenerationStatusResponse {
         var request = URLRequest(url: baseURL.appendingPathComponent("jobs/\(jobID)"))
         request.timeoutInterval = 10
-        let (data, response) = try await URLSession.shared.data(for: request)
+        let (data, response) = try await session.data(for: request)
         guard let http = response as? HTTPURLResponse else { throw InferenceError.invalidResponse }
         if http.statusCode == 404 {
             throw InferenceError.jobNotFound(jobID)
@@ -278,7 +281,7 @@ actor InferenceService {
     func cancel(jobID: String) async throws {
         var request = URLRequest(url: baseURL.appendingPathComponent("jobs/\(jobID)/cancel"))
         request.httpMethod = "POST"
-        let (_, response) = try await URLSession.shared.data(for: request)
+        let (_, response) = try await session.data(for: request)
         guard let http = response as? HTTPURLResponse else { throw InferenceError.invalidResponse }
         guard (200...299).contains(http.statusCode) else {
             throw InferenceError.requestFailed("cancel failed: \(http.statusCode)")
@@ -294,7 +297,7 @@ actor InferenceService {
         request.httpMethod = "POST"
         request.setValue("application/json", forHTTPHeaderField: "Content-Type")
 
-        let (_, response) = try await URLSession.shared.data(for: request)
+        let (_, response) = try await session.data(for: request)
         guard let http = response as? HTTPURLResponse else { throw InferenceError.invalidResponse }
         guard (200...299).contains(http.statusCode) else {
             throw InferenceError.requestFailed("model download trigger failed: \(http.statusCode)")
