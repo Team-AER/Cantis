@@ -1,11 +1,10 @@
 import SwiftUI
 
 struct ModelSettingsView: View {
-    @State private var artifacts: [ModelArtifact] = Self.defaultArtifacts
-    @State private var downloadedSet: Set<String> = []
-    @State private var downloadingID: String?
-    @State private var downloadProgress: Double = 0
+    @State private var modelStatus: ModelStatus = .unknown
+    @State private var isDownloading = false
     @State private var errorMessage: String?
+    @State private var serverRunning = false
 
     private let manager = ModelManagerService()
 
@@ -14,9 +13,7 @@ struct ModelSettingsView: View {
             Text("Models")
                 .font(.headline)
 
-            Text("Models are stored in \(FileUtilities.modelDirectory.path)")
-                .font(.caption)
-                .foregroundStyle(.secondary)
+            engineStatusSection
 
             if let errorMessage {
                 Label(errorMessage, systemImage: "exclamationmark.triangle")
@@ -24,30 +21,78 @@ struct ModelSettingsView: View {
                     .font(.callout)
             }
 
-            VStack(spacing: 0) {
-                ForEach(artifacts) { artifact in
-                    modelRow(artifact)
-                    if artifact.id != artifacts.last?.id {
-                        Divider()
-                    }
-                }
-            }
-            .background(.quaternary.opacity(0.3), in: RoundedRectangle(cornerRadius: 8))
+            modelListSection
 
-            HStack {
-                Button("Reveal in Finder") {
-                    NSWorkspace.shared.selectFile(nil, inFileViewerRootedAtPath: FileUtilities.modelDirectory.path)
-                }
-                Spacer()
-                Button("Refresh") {
-                    Task { await refreshStatus() }
-                }
-            }
-            .font(.callout)
+            actionsSection
         }
         .task {
             await refreshStatus()
         }
+    }
+
+    // MARK: - Engine Status
+
+    @ViewBuilder
+    private var engineStatusSection: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            HStack(spacing: 8) {
+                Circle()
+                    .fill(serverRunning ? (modelStatus.ditLoaded ? .green : .yellow) : .red)
+                    .frame(width: 8, height: 8)
+
+                if serverRunning {
+                    if modelStatus.ditLoaded {
+                        Text("Engine ready — \(modelStatus.engine)")
+                            .font(.callout)
+                            .foregroundStyle(.secondary)
+                    } else if isDownloading {
+                        Text("Downloading models …")
+                            .font(.callout)
+                            .foregroundStyle(.secondary)
+                    } else {
+                        Text("Server running, models not loaded")
+                            .font(.callout)
+                            .foregroundStyle(.secondary)
+                    }
+                } else {
+                    Text("Server not running")
+                        .font(.callout)
+                        .foregroundStyle(.secondary)
+                }
+            }
+
+            if serverRunning && modelStatus.ditLoaded {
+                HStack(spacing: 16) {
+                    Label(modelStatus.device, systemImage: "cpu")
+                    if !modelStatus.ditModel.isEmpty {
+                        Label(modelStatus.ditModel, systemImage: "waveform")
+                    }
+                    if modelStatus.llmLoaded, !modelStatus.llmModel.isEmpty {
+                        Label(modelStatus.llmModel, systemImage: "brain")
+                    }
+                }
+                .font(.caption)
+                .foregroundStyle(.tertiary)
+            }
+        }
+        .padding(12)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .background(.quaternary.opacity(0.3), in: RoundedRectangle(cornerRadius: 8))
+    }
+
+    // MARK: - Model List
+
+    @ViewBuilder
+    private var modelListSection: some View {
+        VStack(spacing: 0) {
+            ForEach(ModelManagerService.knownArtifacts) { artifact in
+                modelRow(artifact)
+                if artifact.id != ModelManagerService.knownArtifacts.last?.id {
+                    Divider()
+                }
+            }
+        }
+        .background(.quaternary.opacity(0.3), in: RoundedRectangle(cornerRadius: 8))
     }
 
     @ViewBuilder
@@ -56,91 +101,111 @@ struct ModelSettingsView: View {
             VStack(alignment: .leading, spacing: 4) {
                 Text(artifact.name)
                     .font(.body.weight(.medium))
-                Text(Self.formatBytes(artifact.sizeBytes))
+                Text(artifact.description)
                     .font(.caption)
                     .foregroundStyle(.secondary)
+                    .lineLimit(2)
             }
 
             Spacer()
 
-            if downloadingID == artifact.id {
-                ProgressView(value: downloadProgress)
-                    .frame(width: 100)
-                    .progressViewStyle(.linear)
-            } else if downloadedSet.contains(artifact.id) {
-                HStack(spacing: 8) {
-                    Label("Downloaded", systemImage: "checkmark.circle.fill")
-                        .foregroundStyle(.green)
-                        .font(.callout)
+            VStack(alignment: .trailing, spacing: 4) {
+                Text(String(format: "~%.1f GB", artifact.estimatedSizeGB))
+                    .font(.caption)
+                    .foregroundStyle(.tertiary)
 
-                    Button(role: .destructive) {
-                        deleteModel(artifact)
-                    } label: {
-                        Image(systemName: "trash")
-                    }
-                    .buttonStyle(.borderless)
-                    .help("Delete model")
-                }
-            } else {
-                Button("Download") {
-                    Task { await downloadModel(artifact) }
-                }
-                .buttonStyle(.borderedProminent)
-                .controlSize(.small)
+                statusBadge(for: artifact)
             }
         }
         .padding(.horizontal, 12)
         .padding(.vertical, 10)
     }
 
-    private func refreshStatus() async {
-        var downloaded: Set<String> = []
-        for artifact in artifacts {
-            if await manager.isDownloaded(artifact) {
-                downloaded.insert(artifact.id)
-            }
+    @ViewBuilder
+    private func statusBadge(for artifact: ModelArtifact) -> some View {
+        if !serverRunning {
+            Text("Offline")
+                .font(.caption2)
+                .foregroundStyle(.secondary)
+                .padding(.horizontal, 6)
+                .padding(.vertical, 2)
+                .background(.quaternary, in: Capsule())
+        } else if isModelLoaded(artifact) {
+            Label("Loaded", systemImage: "checkmark.circle.fill")
+                .font(.caption)
+                .foregroundStyle(.green)
+        } else if isDownloading {
+            ProgressView()
+                .controlSize(.small)
+        } else {
+            Text("Not loaded")
+                .font(.caption2)
+                .foregroundStyle(.orange)
+                .padding(.horizontal, 6)
+                .padding(.vertical, 2)
+                .background(.orange.opacity(0.1), in: Capsule())
         }
-        downloadedSet = downloaded
     }
 
-    private func downloadModel(_ artifact: ModelArtifact) async {
+    private func isModelLoaded(_ artifact: ModelArtifact) -> Bool {
+        switch artifact.name {
+        case _ where artifact.name.contains("turbo") || artifact.name.contains("base") || artifact.name.contains("sft"):
+            return modelStatus.ditLoaded
+        case _ where artifact.name.contains("lm"):
+            return modelStatus.llmLoaded
+        case "vae":
+            return modelStatus.ditLoaded
+        default:
+            return false
+        }
+    }
+
+    // MARK: - Actions
+
+    @ViewBuilder
+    private var actionsSection: some View {
+        HStack {
+            if serverRunning && !modelStatus.ditLoaded && !isDownloading {
+                Button("Download Models") {
+                    Task { await downloadModels() }
+                }
+                .buttonStyle(.borderedProminent)
+                .controlSize(.small)
+            }
+
+            Spacer()
+
+            Button("Refresh") {
+                Task { await refreshStatus() }
+            }
+            .controlSize(.small)
+        }
+        .font(.callout)
+
+        Text("Models are auto-downloaded from HuggingFace on first generation. Stored in the ACE-Step checkpoints directory.")
+            .font(.caption2)
+            .foregroundStyle(.tertiary)
+    }
+
+    // MARK: - Networking
+
+    private func refreshStatus() async {
+        let status = await manager.fetchModelStatus()
+        modelStatus = status
+        serverRunning = status.device != "unknown"
+        errorMessage = status.error
+    }
+
+    private func downloadModels() async {
+        isDownloading = true
         errorMessage = nil
-        downloadingID = artifact.id
-        downloadProgress = 0
         do {
-            _ = try await manager.download(artifact)
-            downloadedSet.insert(artifact.id)
+            try await manager.triggerModelDownload()
+            try? await Task.sleep(for: .seconds(2))
+            await refreshStatus()
         } catch {
             errorMessage = "Download failed: \(error.localizedDescription)"
         }
-        downloadingID = nil
+        isDownloading = false
     }
-
-    private func deleteModel(_ artifact: ModelArtifact) {
-        let path = FileUtilities.modelDirectory.appendingPathComponent(artifact.name)
-        try? FileManager.default.removeItem(at: path)
-        downloadedSet.remove(artifact.id)
-    }
-
-    static func formatBytes(_ bytes: Int64) -> String {
-        let gb = Double(bytes) / 1_073_741_824
-        if gb >= 1 { return String(format: "%.1f GB", gb) }
-        let mb = Double(bytes) / 1_048_576
-        return String(format: "%.0f MB", mb)
-    }
-
-    static let defaultArtifacts: [ModelArtifact] = [
-        ModelArtifact(
-            name: "ace-step-v1-3.5B-fp16.safetensors",
-            downloadURL: URL(string: "https://huggingface.co/ACE-Step/ACE-Step-v1-3.5B/resolve/main/model-fp16.safetensors")!,
-            sha256: "",
-            sizeBytes: 7_000_000_000
-        ),
-        ModelArtifact(
-            name: "ace-step-v1-3.5B-int8.safetensors",
-            downloadURL: URL(string: "https://huggingface.co/ACE-Step/ACE-Step-v1-3.5B/resolve/main/model-int8.safetensors")!,
-            sha256: "",
-            sizeBytes: 3_500_000_000
-        ),
-    ]
 }

@@ -1,5 +1,7 @@
 import Foundation
 
+// MARK: - Request / Response types
+
 struct GenerationRequest: Codable, Sendable {
     var prompt: String
     var lyrics: String
@@ -23,13 +25,46 @@ struct GenerationStatusResponse: Codable, Sendable {
     var audioPath: String?
 }
 
-enum InferenceError: Error {
+struct HealthResponse: Codable, Sendable {
+    var status: String
+    var modelLoaded: Bool
+    var llmLoaded: Bool?
+    var modelError: String?
+    var device: String?
+    var engine: String?
+    var ditModel: String?
+    var llmModel: String?
+}
+
+// MARK: - Errors
+
+enum InferenceError: Error, LocalizedError {
     case serverScriptMissing
     case serverLaunchFailed
     case serverUnhealthy
     case invalidResponse
     case requestFailed(String)
+    case modelNotReady
+
+    var errorDescription: String? {
+        switch self {
+        case .serverScriptMissing:
+            return "Server launch script not found. Run setup_env.sh first."
+        case .serverLaunchFailed:
+            return "Failed to start the inference server process."
+        case .serverUnhealthy:
+            return "Inference server did not become healthy in time."
+        case .invalidResponse:
+            return "Received an invalid response from the server."
+        case .requestFailed(let detail):
+            return "Request failed: \(detail)"
+        case .modelNotReady:
+            return "Model is still downloading or not yet loaded."
+        }
+    }
 }
+
+// MARK: - Service
 
 actor InferenceService {
     private let baseURL: URL
@@ -39,14 +74,15 @@ actor InferenceService {
         self.baseURL = baseURL
     }
 
+    // MARK: Server lifecycle
+
     func startServerIfNeeded() async throws {
         if await isHealthy() { return }
         if serverProcess?.isRunning == true { return }
 
-        let rootURL = URL(fileURLWithPath: FileManager.default.currentDirectoryPath)
-        let scriptURL = rootURL.appendingPathComponent("AuraluxEngine/start_api_server_macos.sh")
+        let scriptURL = Self.locateServerScript()
 
-        guard FileManager.default.fileExists(atPath: scriptURL.path) else {
+        guard let scriptURL, FileManager.default.fileExists(atPath: scriptURL.path) else {
             throw InferenceError.serverScriptMissing
         }
 
@@ -64,7 +100,10 @@ actor InferenceService {
             throw InferenceError.serverLaunchFailed
         }
 
-        for _ in 0..<20 {
+        // ACE-Step 1.5 may need time to download models on first launch.
+        // Allow up to 5 minutes for the server to become healthy.
+        let maxAttempts = 600
+        for _ in 0..<maxAttempts {
             if await isHealthy() {
                 return
             }
@@ -81,9 +120,11 @@ actor InferenceService {
         serverProcess = nil
     }
 
+    // MARK: Health
+
     func isHealthy() async -> Bool {
         var request = URLRequest(url: baseURL.appendingPathComponent("health"))
-        request.timeoutInterval = 2
+        request.timeoutInterval = 5
 
         do {
             let (_, response) = try await URLSession.shared.data(for: request)
@@ -93,6 +134,22 @@ actor InferenceService {
             return false
         }
     }
+
+    func fetchHealth() async -> HealthResponse? {
+        var request = URLRequest(url: baseURL.appendingPathComponent("health"))
+        request.timeoutInterval = 5
+
+        do {
+            let (data, response) = try await URLSession.shared.data(for: request)
+            guard let http = response as? HTTPURLResponse,
+                  (200...299).contains(http.statusCode) else { return nil }
+            return try JSONDecoder().decode(HealthResponse.self, from: data)
+        } catch {
+            return nil
+        }
+    }
+
+    // MARK: Generation
 
     func generate(_ requestBody: GenerationRequest) async throws -> GenerationResponse {
         try await startServerIfNeeded()
@@ -129,5 +186,40 @@ actor InferenceService {
         guard (200...299).contains(http.statusCode) else {
             throw InferenceError.requestFailed("cancel failed: \(http.statusCode)")
         }
+    }
+
+    // MARK: Model management
+
+    func triggerModelDownload() async throws {
+        try await startServerIfNeeded()
+
+        var request = URLRequest(url: baseURL.appendingPathComponent("models/download"))
+        request.httpMethod = "POST"
+        request.setValue("application/json", forHTTPHeaderField: "Content-Type")
+
+        let (_, response) = try await URLSession.shared.data(for: request)
+        guard let http = response as? HTTPURLResponse else { throw InferenceError.invalidResponse }
+        guard (200...299).contains(http.statusCode) else {
+            throw InferenceError.requestFailed("model download trigger failed: \(http.statusCode)")
+        }
+    }
+
+    // MARK: Helpers
+
+    private static func locateServerScript() -> URL? {
+        let candidates = [
+            URL(fileURLWithPath: FileManager.default.currentDirectoryPath)
+                .appendingPathComponent("AuraluxEngine/start_api_server_macos.sh"),
+            Bundle.main.bundleURL
+                .deletingLastPathComponent()
+                .appendingPathComponent("AuraluxEngine/start_api_server_macos.sh"),
+        ]
+
+        for candidate in candidates {
+            if FileManager.default.fileExists(atPath: candidate.path) {
+                return candidate
+            }
+        }
+        return nil
     }
 }

@@ -1,15 +1,19 @@
 #!/usr/bin/env python3
-"""Auralux local API server — ACE-Step MLX inference backend.
+"""Auralux local API server — ACE-Step v1.5 inference backend.
 
-REST contract consumed by the Swift front-end:
-- GET  /health
-- POST /generate   (body: prompt, lyrics, tags, duration, variance, seed)
-- GET  /jobs/<id>
-- POST /jobs/<id>/cancel
+Thin adapter that wraps ACE-Step 1.5's Python inference API while
+keeping the REST contract the Swift front-end already speaks:
 
-The server lazily loads the ACE-Step model on first generation request and
-runs inference on Apple Silicon via MLX.  If the model package is not yet
-available it falls back to a silent-audio stub so the UI remains functional.
+  GET  /health
+  POST /generate       {prompt, lyrics, tags, duration, seed, ...}
+  GET  /jobs/<id>
+  POST /jobs/<id>/cancel
+  POST /models/download
+
+The DiT runs via PyTorch MPS on Apple Silicon.  The optional 5Hz LM
+uses the MLX backend for native acceleration (set ACESTEP_LM_BACKEND=mlx).
+
+Models are auto-downloaded from HuggingFace on first generation.
 """
 
 from __future__ import annotations
@@ -18,14 +22,13 @@ import argparse
 import json
 import logging
 import os
-import struct
 import sys
 import threading
 import time
 import traceback
 import uuid
 import wave
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from http import HTTPStatus
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
@@ -39,50 +42,106 @@ logging.basicConfig(
 log = logging.getLogger("auralux")
 
 # ---------------------------------------------------------------------------
-# Model loader (lazy singleton)
+# Paths – resolve the cloned ACE-Step 1.5 repo so we can import `acestep`
 # ---------------------------------------------------------------------------
 
-_model_lock = threading.Lock()
-_pipeline: Optional[Any] = None
-_model_load_error: Optional[str] = None
+SCRIPT_DIR = Path(__file__).resolve().parent
+ACE_STEP_DIR = SCRIPT_DIR / "ACE-Step-1.5"
+CHECKPOINTS_DIR = ACE_STEP_DIR / "checkpoints"
+
+if ACE_STEP_DIR.is_dir():
+    sys.path.insert(0, str(ACE_STEP_DIR))
+
+# ---------------------------------------------------------------------------
+# Lazy model loading
+# ---------------------------------------------------------------------------
+
+_init_lock = threading.Lock()
+_dit_handler: Optional[Any] = None
+_llm_handler: Optional[Any] = None
+_init_error: Optional[str] = None
+_init_done = False
 
 
-def _get_pipeline() -> Any:
-    """Return a loaded ACE-Step pipeline, or *None* if unavailable."""
-    global _pipeline, _model_load_error
-    if _pipeline is not None:
-        return _pipeline
-    with _model_lock:
-        if _pipeline is not None:
-            return _pipeline
-        if _model_load_error is not None:
-            return None
+def _ensure_initialized() -> bool:
+    """Lazily initialize the ACE-Step handlers.  Returns True on success."""
+    global _dit_handler, _llm_handler, _init_error, _init_done
+
+    if _init_done:
+        return _dit_handler is not None
+
+    with _init_lock:
+        if _init_done:
+            return _dit_handler is not None
+
         try:
-            log.info("Loading ACE-Step model (this may take a minute) …")
-            from ace_step.pipeline import ACEStepPipeline
+            log.info("Importing ACE-Step 1.5 modules …")
+            from acestep.handler import AceStepHandler
+            from acestep.llm_inference import LLMHandler
 
-            model_dir = os.environ.get(
-                "AURALUX_MODEL_DIR",
-                str(
-                    Path.home()
-                    / "Library"
-                    / "Application Support"
-                    / "Auralux"
-                    / "Models"
-                ),
+            project_root = str(ACE_STEP_DIR)
+            os.makedirs(str(CHECKPOINTS_DIR), exist_ok=True)
+
+            # --- DiT handler ---
+            dit = AceStepHandler()
+            config_path = os.environ.get("ACESTEP_CONFIG_PATH", "acestep-v15-turbo")
+            device = os.environ.get("ACESTEP_DEVICE", "auto")
+            offload = os.environ.get("ACESTEP_OFFLOAD_TO_CPU", "false").lower() in ("1", "true", "yes")
+
+            log.info("Initializing DiT handler (config=%s, device=%s) …", config_path, device)
+            status_msg, ok = dit.initialize_service(
+                project_root=project_root,
+                config_path=config_path,
+                device=device,
+                offload_to_cpu=offload,
             )
-            _pipeline = ACEStepPipeline(model_dir=model_dir)
-            log.info("ACE-Step model loaded successfully.")
-            return _pipeline
+            if not ok:
+                raise RuntimeError(f"DiT init failed: {status_msg}")
+            log.info("DiT handler ready: %s", status_msg)
+            _dit_handler = dit
+
+            # --- LLM handler (optional, best-effort) ---
+            init_llm = os.environ.get("ACESTEP_INIT_LLM", "auto").lower()
+            if init_llm == "false":
+                log.info("LLM disabled via ACESTEP_INIT_LLM=false")
+                _llm_handler = LLMHandler()
+            else:
+                llm = LLMHandler()
+                lm_model = os.environ.get("ACESTEP_LM_MODEL_PATH", "acestep-5Hz-lm-0.6B")
+                lm_backend = os.environ.get("ACESTEP_LM_BACKEND", "mlx")
+                lm_device = os.environ.get("ACESTEP_LM_DEVICE", device)
+                lm_offload = os.environ.get("ACESTEP_LM_OFFLOAD_TO_CPU", "false").lower() in ("1", "true", "yes")
+
+                log.info("Initializing LLM handler (model=%s, backend=%s) …", lm_model, lm_backend)
+                try:
+                    lm_status, lm_ok = llm.initialize(
+                        checkpoint_dir=str(CHECKPOINTS_DIR),
+                        lm_model_path=lm_model,
+                        backend=lm_backend,
+                        device=lm_device,
+                        offload_to_cpu=lm_offload,
+                    )
+                    if lm_ok:
+                        log.info("LLM handler ready: %s", lm_status)
+                    else:
+                        log.warning("LLM init returned not-ok: %s — proceeding without LLM", lm_status)
+                except Exception as exc:
+                    log.warning("LLM init failed: %s — proceeding without LLM", exc)
+                _llm_handler = llm
+
+            _init_done = True
+            return True
+
         except Exception as exc:
-            _model_load_error = str(exc)
-            log.warning("ACE-Step model unavailable: %s", exc)
-            log.warning("Falling back to stub audio generation.")
-            return None
+            _init_error = str(exc)
+            _init_done = True
+            log.error("ACE-Step initialization failed: %s", exc)
+            traceback.print_exc()
+            return False
 
 
 # ---------------------------------------------------------------------------
-# Job datastructures
+# Job store
 # ---------------------------------------------------------------------------
 
 @dataclass
@@ -133,7 +192,7 @@ def _write_silent_wav(path: Path, duration_sec: float, sample_rate: int = 44100)
         wf.setnchannels(2)
         wf.setsampwidth(2)
         wf.setframerate(sample_rate)
-        silence = b"\x00\x00\x00\x00" * num_frames  # 2 channels × 16-bit
+        silence = b"\x00\x00\x00\x00" * num_frames
         wf.writeframes(silence)
 
 
@@ -147,19 +206,18 @@ def _run_job(
     seed: Optional[int],
 ) -> None:
     """Execute a generation job — real model or stub fallback."""
-    JOBS.update(job_id, status="running", progress=0.05)
+    JOBS.update(job_id, status="running", progress=0.05, message="Initializing …")
 
     output_dir = Path.home() / "Library" / "Application Support" / "Auralux" / "Generated"
     output_dir.mkdir(parents=True, exist_ok=True)
     output_path = output_dir / f"{job_id}.wav"
 
     try:
-        pipeline = _get_pipeline()
+        model_ready = _ensure_initialized()
 
-        if pipeline is not None:
+        if model_ready and _dit_handler is not None:
             _run_real_inference(
                 job_id=job_id,
-                pipeline=pipeline,
                 prompt=prompt,
                 lyrics=lyrics,
                 tags=tags,
@@ -191,7 +249,6 @@ def _run_job(
 def _run_real_inference(
     *,
     job_id: str,
-    pipeline: Any,
     prompt: str,
     lyrics: str,
     tags: List[str],
@@ -200,60 +257,70 @@ def _run_real_inference(
     seed: Optional[int],
     output_path: Path,
 ) -> None:
-    """Run ACE-Step MLX inference and write the output WAV."""
-    import numpy as np
-    import soundfile as sf
+    """Run ACE-Step v1.5 inference and write the output audio file."""
+    from acestep.inference import GenerationParams, GenerationConfig, generate_music
 
-    full_prompt = prompt
+    caption = prompt
     if tags:
-        full_prompt = ", ".join(tags) + ". " + full_prompt
+        caption = ", ".join(tags) + ". " + caption
 
     JOBS.update(job_id, progress=0.10, message="Preparing generation …")
 
-    def progress_callback(step: int, total_steps: int) -> bool:
-        """Called by the pipeline each diffusion step. Return False to cancel."""
-        job = JOBS.get(job_id)
-        if job and job.cancelled:
-            return False
-        frac = 0.10 + 0.85 * (step / max(1, total_steps))
-        JOBS.update(job_id, progress=min(0.95, frac), message=f"Step {step}/{total_steps}")
-        return True
+    use_random = seed is None or seed < 0
+    actual_seed = seed if not use_random else -1
 
-    generate_kwargs: Dict[str, Any] = {
-        "prompt": full_prompt,
-        "duration": duration,
-    }
-    if lyrics:
-        generate_kwargs["lyrics"] = lyrics
-    if seed is not None:
-        generate_kwargs["seed"] = seed
+    params = GenerationParams(
+        task_type="text2music",
+        caption=caption,
+        lyrics=lyrics if lyrics else "",
+        instrumental=not bool(lyrics),
+        duration=float(duration) if duration > 0 else -1.0,
+        seed=actual_seed,
+        inference_steps=8,
+        thinking=_llm_handler is not None and getattr(_llm_handler, "llm_initialized", False),
+    )
 
-    # The pipeline API may vary — adapt to the available signature
-    if hasattr(pipeline, "generate"):
-        audio = pipeline.generate(**generate_kwargs, callback=progress_callback)
-    elif hasattr(pipeline, "__call__"):
-        audio = pipeline(**generate_kwargs)
-    else:
-        raise RuntimeError("ACE-Step pipeline has no generate() or __call__ method")
+    config = GenerationConfig(
+        batch_size=1,
+        use_random_seed=use_random,
+        seeds=[actual_seed] if not use_random else None,
+        audio_format="wav",
+    )
+
+    save_dir = str(output_path.parent)
+
+    JOBS.update(job_id, progress=0.15, message="Running inference …")
+
+    result = generate_music(
+        dit_handler=_dit_handler,
+        llm_handler=_llm_handler,
+        params=params,
+        config=config,
+        save_dir=save_dir,
+    )
+
+    if not result.success:
+        raise RuntimeError(result.error or "Generation failed with no error message")
 
     JOBS.update(job_id, progress=0.95, message="Saving audio …")
 
-    # Handle various return types
-    if isinstance(audio, dict):
-        audio_data = audio.get("audio", audio.get("waveform"))
-    elif isinstance(audio, tuple):
-        audio_data = audio[0]
+    if result.audios and len(result.audios) > 0:
+        audio_info = result.audios[0]
+        generated_path = audio_info.get("path")
+
+        if generated_path and Path(generated_path).exists():
+            import shutil
+            if Path(generated_path).resolve() != output_path.resolve():
+                shutil.copy2(generated_path, output_path)
+        elif "tensor" in audio_info:
+            import torchaudio
+            tensor = audio_info["tensor"]
+            sr = audio_info.get("sample_rate", 48000)
+            torchaudio.save(str(output_path), tensor, sr)
+        else:
+            raise RuntimeError("No audio data in generation result")
     else:
-        audio_data = audio
-
-    audio_np = np.asarray(audio_data, dtype=np.float32)
-    if audio_np.ndim == 3:
-        audio_np = audio_np.squeeze(0)
-    if audio_np.ndim == 1:
-        audio_np = audio_np.reshape(1, -1)
-
-    # audio_np shape: (channels, samples) — transpose for soundfile
-    sf.write(str(output_path), audio_np.T, samplerate=44100, subtype="PCM_16")
+        raise RuntimeError("Generation returned empty audio list")
 
 
 def _run_stub_inference(
@@ -281,8 +348,12 @@ def _run_stub_inference(
     _write_silent_wav(output_path, duration_sec=duration)
 
 
+# ---------------------------------------------------------------------------
+# HTTP handler
+# ---------------------------------------------------------------------------
+
 class Handler(BaseHTTPRequestHandler):
-    server_version = "AuraluxServer/0.1"
+    server_version = "AuraluxServer/1.5"
 
     def _read_json(self) -> Dict[str, object]:
         length = int(self.headers.get("Content-Length", "0"))
@@ -298,13 +369,21 @@ class Handler(BaseHTTPRequestHandler):
         self.end_headers()
         self.wfile.write(body)
 
-    def do_GET(self) -> None:  # noqa: N802
+    def do_GET(self) -> None:
         if self.path == "/health":
-            model_loaded = _pipeline is not None
+            dit_ready = _dit_handler is not None and _init_done
+            llm_ready = _llm_handler is not None and getattr(_llm_handler, "llm_initialized", False)
+            device = getattr(_dit_handler, "device", "unknown") if _dit_handler else "unknown"
+
             self._send_json({
                 "status": "ok",
-                "modelLoaded": model_loaded,
-                "modelError": _model_load_error,
+                "modelLoaded": dit_ready,
+                "llmLoaded": llm_ready,
+                "modelError": _init_error,
+                "device": str(device),
+                "engine": "ace-step-v1.5",
+                "ditModel": os.environ.get("ACESTEP_CONFIG_PATH", "acestep-v15-turbo"),
+                "llmModel": os.environ.get("ACESTEP_LM_MODEL_PATH", "acestep-5Hz-lm-0.6B"),
             })
             return
 
@@ -314,20 +393,18 @@ class Handler(BaseHTTPRequestHandler):
             if not job:
                 self._send_json({"error": "job not found"}, HTTPStatus.NOT_FOUND)
                 return
-            self._send_json(
-                {
-                    "jobID": job.id,
-                    "status": job.status,
-                    "progress": job.progress,
-                    "message": job.message,
-                    "audioPath": job.audio_path,
-                }
-            )
+            self._send_json({
+                "jobID": job.id,
+                "status": job.status,
+                "progress": job.progress,
+                "message": job.message,
+                "audioPath": job.audio_path,
+            })
             return
 
         self._send_json({"error": "not found"}, HTTPStatus.NOT_FOUND)
 
-    def do_POST(self) -> None:  # noqa: N802
+    def do_POST(self) -> None:
         if self.path == "/generate":
             payload = self._read_json()
             prompt = str(payload.get("prompt", ""))
@@ -346,7 +423,10 @@ class Handler(BaseHTTPRequestHandler):
             )
             worker.start()
 
-            self._send_json({"jobID": job.id, "status": "queued", "message": "accepted"}, HTTPStatus.ACCEPTED)
+            self._send_json(
+                {"jobID": job.id, "status": "queued", "message": "accepted"},
+                HTTPStatus.ACCEPTED,
+            )
             return
 
         if self.path.startswith("/jobs/") and self.path.endswith("/cancel"):
@@ -359,20 +439,38 @@ class Handler(BaseHTTPRequestHandler):
             self._send_json({"jobID": job.id, "status": "cancelling"})
             return
 
+        if self.path == "/models/download":
+            threading.Thread(target=_ensure_initialized, daemon=True).start()
+            self._send_json({"status": "download_started", "message": "Model download triggered"})
+            return
+
         self._send_json({"error": "not found"}, HTTPStatus.NOT_FOUND)
 
     def log_message(self, format: str, *args: object) -> None:
         log.debug(format, *args)
 
 
+# ---------------------------------------------------------------------------
+# Main
+# ---------------------------------------------------------------------------
+
 def main() -> None:
-    parser = argparse.ArgumentParser()
+    parser = argparse.ArgumentParser(description="Auralux API server (ACE-Step v1.5)")
     parser.add_argument("--port", type=int, default=8765)
+    parser.add_argument("--preload", action="store_true", help="Load model at startup instead of lazily")
     args = parser.parse_args()
 
+    if args.preload:
+        log.info("Preloading model …")
+        _ensure_initialized()
+
     server = ThreadingHTTPServer(("127.0.0.1", args.port), Handler)
-    print(f"Auralux API server listening on http://127.0.0.1:{args.port}")
-    server.serve_forever()
+    log.info("Auralux API server listening on http://127.0.0.1:%d", args.port)
+    try:
+        server.serve_forever()
+    except KeyboardInterrupt:
+        log.info("Shutting down …")
+        server.shutdown()
 
 
 if __name__ == "__main__":

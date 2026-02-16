@@ -151,25 +151,30 @@ final class ModelTests: XCTestCase {
 
     func testModelArtifactIdentifiable() {
         let artifact = ModelArtifact(
-            name: "model-fp16.safetensors",
-            downloadURL: URL(string: "https://example.com/model")!,
-            sha256: "abc123",
-            sizeBytes: 7_000_000_000
+            name: "acestep-v15-turbo",
+            repoID: "ACE-Step/Ace-Step1.5",
+            description: "DiT turbo model",
+            estimatedSizeGB: 2.5
         )
-        XCTAssertEqual(artifact.id, "model-fp16.safetensors")
+        XCTAssertEqual(artifact.id, "acestep-v15-turbo")
     }
 
     func testModelArtifactCodable() throws {
         let artifact = ModelArtifact(
-            name: "model.bin",
-            downloadURL: URL(string: "https://example.com/model.bin")!,
-            sha256: "deadbeef",
-            sizeBytes: 1024
+            name: "acestep-5Hz-lm-0.6B",
+            repoID: "ACE-Step/acestep-5Hz-lm-0.6B",
+            description: "5Hz LM model",
+            estimatedSizeGB: 1.2
         )
         let data = try JSONEncoder().encode(artifact)
         let decoded = try JSONDecoder().decode(ModelArtifact.self, from: data)
         XCTAssertEqual(decoded.name, artifact.name)
-        XCTAssertEqual(decoded.sha256, artifact.sha256)
-        XCTAssertEqual(decoded.sizeBytes, artifact.sizeBytes)
+        XCTAssertEqual(decoded.repoID, artifact.repoID)
+        XCTAssertEqual(decoded.estimatedSizeGB, artifact.estimatedSizeGB)
+    }
+
+    func testKnownArtifactsNotEmpty() {
+        XCTAssertFalse(ModelManagerService.knownArtifacts.isEmpty)
+        XCTAssertTrue(ModelManagerService.knownArtifacts.contains { $0.name == "acestep-v15-turbo" })
     }
 }

@@ -21,3 +21,9 @@ AuraluxEngine/__pycache__/
 *.py[cod]
 .pytest_cache/
 .mypy_cache/
+
+# ACE-Step 1.5 cloned repo (installed at setup time)
+AuraluxEngine/ACE-Step-1.5/
+
+# Model checkpoints (downloaded at first run)
+AuraluxEngine/checkpoints/
