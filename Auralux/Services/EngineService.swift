@@ -1,0 +1,442 @@
+import Foundation
+import Observation
+
+/// Represents the overall state of the Auralux inference engine.
+enum EngineState: Equatable, Sendable {
+    case unknown
+    case notSetup
+    case settingUp(progress: String)
+    case starting
+    case running
+    case ready
+    case error(String)
+
+    var isReady: Bool { self == .ready }
+    var isRunning: Bool { self == .running || self == .ready }
+    var isBusy: Bool {
+        switch self {
+        case .settingUp, .starting: return true
+        default: return false
+        }
+    }
+    var needsSetup: Bool { self == .notSetup }
+}
+
+/// Manages the full lifecycle of the Auralux inference engine:
+/// setup detection, environment provisioning, server start/stop,
+/// health monitoring, and graceful shutdown.
+@MainActor
+@Observable
+final class EngineService {
+    var state: EngineState = .unknown
+    var setupLog: [String] = []
+    var modelStatus: ModelStatus = .unknown
+    /// Whether the onboarding SetupView is currently shown.
+    /// Used to suppress duplicate error banners in other views.
+    var isOnboarding = false
+    var hasCompletedSetup: Bool {
+        UserDefaults.standard.bool(forKey: Keys.setupCompleted)
+    }
+
+    private var serverProcess: Process?
+    private var healthTask: Task<Void, Never>?
+    private var setupProcess: Process?
+
+    private let inferenceService: InferenceService
+
+    private enum Keys {
+        static let setupCompleted = "engine.setupCompleted"
+        static let engineDirOverride = "engine.directoryOverride"
+    }
+
+    init(inferenceService: InferenceService) {
+        self.inferenceService = inferenceService
+    }
+
+    // MARK: - Engine Directory Resolution
+
+    /// The project source root, derived at compile time from the location of this source file.
+    /// This ensures the engine directory is found even when running from Xcode's DerivedData.
+    private nonisolated static let compileTimeSourceRoot: URL = {
+        // #filePath → .../Auralux/Services/EngineService.swift
+        // Walk up 3 levels: Services → Auralux → project root
+        var url = URL(fileURLWithPath: #filePath)
+        for _ in 0..<3 { url = url.deletingLastPathComponent() }
+        return url
+    }()
+
+    /// Locates the AuraluxEngine directory by checking several candidates.
+    nonisolated var engineDirectory: URL? {
+        // Allow explicit override stored in UserDefaults
+        if let override = UserDefaults.standard.string(forKey: Keys.engineDirOverride) {
+            let url = URL(fileURLWithPath: override)
+            if FileManager.default.fileExists(atPath: url.appendingPathComponent("server.py").path) {
+                return url
+            }
+        }
+
+        let fm = FileManager.default
+        let candidates = [
+            // Compile-time source root (works from Xcode DerivedData)
+            Self.compileTimeSourceRoot
+                .appendingPathComponent("AuraluxEngine"),
+            // Next to the running executable (SPM .build/debug/)
+            Bundle.main.executableURL?
+                .deletingLastPathComponent()
+                .appendingPathComponent("AuraluxEngine"),
+            // CWD (when running from terminal with project root as CWD)
+            URL(fileURLWithPath: fm.currentDirectoryPath)
+                .appendingPathComponent("AuraluxEngine"),
+            // Two levels up from executable (common in .app bundles)
+            Bundle.main.bundleURL
+                .deletingLastPathComponent()
+                .appendingPathComponent("AuraluxEngine"),
+            // Inside app bundle Resources
+            Bundle.main.resourceURL?
+                .appendingPathComponent("AuraluxEngine"),
+        ].compactMap { $0 }
+
+        return candidates.first { fm.fileExists(atPath: $0.appendingPathComponent("server.py").path) }
+    }
+
+    var isVenvReady: Bool {
+        guard let dir = engineDirectory else { return false }
+        let venvPython = dir
+            .appendingPathComponent("ACE-Step-1.5")
+            .appendingPathComponent(".venv")
+            .appendingPathComponent("bin")
+            .appendingPathComponent("python")
+        return FileManager.default.fileExists(atPath: venvPython.path)
+    }
+
+    var isACEStepCloned: Bool {
+        guard let dir = engineDirectory else { return false }
+        let pyproject = dir
+            .appendingPathComponent("ACE-Step-1.5")
+            .appendingPathComponent("pyproject.toml")
+        return FileManager.default.fileExists(atPath: pyproject.path)
+    }
+
+    // MARK: - Status Check
+
+    func checkStatus() async {
+        guard engineDirectory != nil else {
+            state = .error("AuraluxEngine directory not found.")
+            return
+        }
+
+        if await inferenceService.isHealthy() {
+            let health = await inferenceService.fetchHealth()
+            if let health, health.modelLoaded {
+                updateModelStatus(from: health)
+                state = .ready
+            } else {
+                state = .running
+            }
+            startHealthMonitoring()
+            return
+        }
+
+        if !isACEStepCloned || !isVenvReady {
+            state = .notSetup
+            return
+        }
+
+        if hasCompletedSetup {
+            state = .notSetup
+            // Venv exists but server not running — try starting
+            await startServer()
+        } else {
+            state = .notSetup
+        }
+    }
+
+    // MARK: - Setup
+
+    func runSetup() async {
+        guard let engineDir = engineDirectory else {
+            state = .error("AuraluxEngine directory not found.")
+            return
+        }
+
+        let setupScript = engineDir.appendingPathComponent("setup_env.sh")
+        guard FileManager.default.fileExists(atPath: setupScript.path) else {
+            state = .error("setup_env.sh not found in AuraluxEngine directory.")
+            return
+        }
+
+        state = .settingUp(progress: "Starting environment setup...")
+        setupLog = []
+        appendLog("Starting Auralux Engine setup...")
+
+        let proc = Process()
+        proc.executableURL = URL(fileURLWithPath: "/bin/zsh")
+        proc.arguments = ["-l", setupScript.path]
+        proc.currentDirectoryURL = engineDir
+
+        let stdoutPipe = Pipe()
+        let stderrPipe = Pipe()
+        proc.standardOutput = stdoutPipe
+        proc.standardError = stderrPipe
+
+        setupProcess = proc
+
+        // Stream stdout
+        let stdoutHandle = stdoutPipe.fileHandleForReading
+        stdoutHandle.readabilityHandler = { [weak self] handle in
+            let data = handle.availableData
+            guard !data.isEmpty, let line = String(data: data, encoding: .utf8) else { return }
+            let trimmed = line.trimmingCharacters(in: .whitespacesAndNewlines)
+            if !trimmed.isEmpty {
+                Task { @MainActor [weak self] in
+                    self?.appendLog(trimmed)
+                    self?.updateSetupProgress(trimmed)
+                }
+            }
+        }
+
+        // Stream stderr
+        let stderrHandle = stderrPipe.fileHandleForReading
+        stderrHandle.readabilityHandler = { [weak self] handle in
+            let data = handle.availableData
+            guard !data.isEmpty, let line = String(data: data, encoding: .utf8) else { return }
+            let trimmed = line.trimmingCharacters(in: .whitespacesAndNewlines)
+            if !trimmed.isEmpty {
+                Task { @MainActor [weak self] in
+                    self?.appendLog(trimmed)
+                }
+            }
+        }
+
+        do {
+            try proc.run()
+        } catch {
+            state = .error("Failed to start setup: \(error.localizedDescription)")
+            return
+        }
+
+        // Wait for process to complete in background
+        await withCheckedContinuation { continuation in
+            proc.terminationHandler = { _ in
+                continuation.resume()
+            }
+        }
+
+        stdoutHandle.readabilityHandler = nil
+        stderrHandle.readabilityHandler = nil
+        setupProcess = nil
+
+        if proc.terminationStatus == 0 {
+            appendLog("Setup completed successfully!")
+            UserDefaults.standard.set(true, forKey: Keys.setupCompleted)
+            state = .notSetup // Will transition to starting when startServer is called
+            await startServer()
+        } else {
+            appendLog("Setup failed with exit code \(proc.terminationStatus)")
+            state = .error("Environment setup failed. Check the log for details.")
+        }
+    }
+
+    private func updateSetupProgress(_ line: String) {
+        if line.contains("Cloning") {
+            state = .settingUp(progress: "Cloning ACE-Step 1.5 repository...")
+        } else if line.contains("Installing uv") {
+            state = .settingUp(progress: "Installing uv package manager...")
+        } else if line.contains("Syncing Python") || line.contains("uv sync") {
+            state = .settingUp(progress: "Installing Python dependencies (this may take several minutes)...")
+        } else if line.contains("Environment ready") {
+            state = .settingUp(progress: "Environment ready!")
+        }
+    }
+
+    private func appendLog(_ message: String) {
+        setupLog.append(message)
+        if setupLog.count > 500 {
+            setupLog.removeFirst(100)
+        }
+    }
+
+    // MARK: - Server Lifecycle
+
+    func startServer() async {
+        guard let engineDir = engineDirectory else {
+            state = .error("AuraluxEngine directory not found.")
+            return
+        }
+
+        let startScript = engineDir.appendingPathComponent("start_api_server_macos.sh")
+        guard FileManager.default.fileExists(atPath: startScript.path) else {
+            state = .error("start_api_server_macos.sh not found.")
+            return
+        }
+
+        // Check if server is already running
+        if await inferenceService.isHealthy() {
+            state = .running
+            startHealthMonitoring()
+            await refreshModelStatus()
+            return
+        }
+
+        state = .starting
+        appendLog("Starting inference server...")
+
+        let proc = Process()
+        proc.executableURL = URL(fileURLWithPath: "/bin/zsh")
+        proc.arguments = ["-l", startScript.path]
+        proc.currentDirectoryURL = engineDir
+
+        let pipe = Pipe()
+        proc.standardOutput = pipe
+        proc.standardError = pipe
+
+        // Log server output
+        pipe.fileHandleForReading.readabilityHandler = { [weak self] handle in
+            let data = handle.availableData
+            guard !data.isEmpty, let text = String(data: data, encoding: .utf8) else { return }
+            let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
+            if !trimmed.isEmpty {
+                Task { @MainActor [weak self] in
+                    self?.appendLog(trimmed)
+                }
+            }
+        }
+
+        do {
+            try proc.run()
+            serverProcess = proc
+        } catch {
+            state = .error("Failed to start server: \(error.localizedDescription)")
+            return
+        }
+
+        // Poll for health
+        let maxAttempts = 120 // 60 seconds
+        for attempt in 0..<maxAttempts {
+            if await inferenceService.isHealthy() {
+                state = .running
+                startHealthMonitoring()
+                await refreshModelStatus()
+                appendLog("Server is running and healthy.")
+                return
+            }
+
+            // Check if process died
+            if !proc.isRunning {
+                state = .error("Server process exited unexpectedly (code \(proc.terminationStatus)).")
+                return
+            }
+
+            if attempt % 10 == 0 && attempt > 0 {
+                appendLog("Waiting for server to become ready... (\(attempt / 2)s)")
+            }
+            try? await Task.sleep(for: .milliseconds(500))
+        }
+
+        state = .error("Server did not become healthy within 60 seconds.")
+    }
+
+    func stopServer() {
+        healthTask?.cancel()
+        healthTask = nil
+
+        if let proc = serverProcess, proc.isRunning {
+            proc.terminate()
+            appendLog("Server stopped.")
+        }
+        serverProcess = nil
+        state = .unknown
+    }
+
+    // MARK: - Health Monitoring
+
+    private func startHealthMonitoring() {
+        healthTask?.cancel()
+        healthTask = Task { [weak self] in
+            while !Task.isCancelled {
+                try? await Task.sleep(for: .seconds(10))
+                guard !Task.isCancelled else { break }
+                await self?.performHealthCheck()
+            }
+        }
+    }
+
+    private func performHealthCheck() async {
+        let healthy = await inferenceService.isHealthy()
+        if healthy {
+            let health = await inferenceService.fetchHealth()
+            if let health {
+                updateModelStatus(from: health)
+                state = health.modelLoaded ? .ready : .running
+            }
+        } else {
+            // Server might have crashed — check if process is still alive
+            if let proc = serverProcess, !proc.isRunning {
+                appendLog("Server process died. Attempting restart...")
+                await startServer()
+            } else if serverProcess == nil {
+                // External server went away
+                state = .error("Lost connection to inference server.")
+            }
+        }
+    }
+
+    // MARK: - Model Status
+
+    func refreshModelStatus() async {
+        if let health = await inferenceService.fetchHealth() {
+            updateModelStatus(from: health)
+        }
+    }
+
+    func triggerModelDownload() async {
+        do {
+            try await inferenceService.triggerModelDownload()
+            appendLog("Model download triggered.")
+            // Poll for completion
+            for _ in 0..<600 {
+                try? await Task.sleep(for: .seconds(1))
+                if let health = await inferenceService.fetchHealth(), health.modelLoaded {
+                    updateModelStatus(from: health)
+                    state = .ready
+                    appendLog("Models loaded successfully.")
+                    return
+                }
+            }
+        } catch {
+            appendLog("Model download failed: \(error.localizedDescription)")
+        }
+    }
+
+    private func updateModelStatus(from health: HealthResponse) {
+        modelStatus = ModelStatus(
+            ditLoaded: health.modelLoaded,
+            llmLoaded: health.llmLoaded ?? false,
+            device: health.device ?? "unknown",
+            engine: health.engine ?? "unknown",
+            ditModel: health.ditModel ?? "",
+            llmModel: health.llmModel ?? "",
+            error: health.modelError
+        )
+    }
+
+    // MARK: - Convenience
+
+    /// Called when the app is about to quit.
+    func shutdown() {
+        stopServer()
+    }
+
+    /// Attempts to connect to an already-running external server
+    /// (useful when the user starts the server manually).
+    func connectToExternalServer() async {
+        if await inferenceService.isHealthy() {
+            state = .running
+            startHealthMonitoring()
+            await refreshModelStatus()
+            appendLog("Connected to external server.")
+        } else {
+            state = .error("No server found at \(AppConstants.inferenceBaseURL.absoluteString)")
+        }
+    }
+}

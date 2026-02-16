@@ -5,10 +5,44 @@ struct ContentView: View {
     @Environment(SidebarViewModel.self) private var sidebarViewModel
     @Environment(HistoryViewModel.self) private var historyViewModel
     @Environment(GenerationViewModel.self) private var generationViewModel
+    @Environment(EngineService.self) private var engineService
     @Environment(\.modelContext) private var modelContext
     @State private var didBootstrap = false
 
     var body: some View {
+        ZStack {
+            mainContent
+
+            if engineService.isOnboarding {
+                SetupView()
+                    .frame(maxWidth: .infinity, maxHeight: .infinity)
+                    .background(.background)
+                    .transition(.opacity)
+            }
+        }
+        .task {
+            guard !didBootstrap else { return }
+            didBootstrap = true
+
+            let presetService = PresetService(context: modelContext)
+            try? presetService.bootstrapFromBundleIfNeeded()
+            historyViewModel.refresh(context: modelContext)
+
+            // Check engine status on launch
+            await engineService.checkStatus()
+
+            if !engineService.state.isReady && !engineService.state.isRunning {
+                withAnimation { engineService.isOnboarding = true }
+            }
+        }
+        .onChange(of: engineService.state) { _, newState in
+            if newState.isReady {
+                withAnimation { engineService.isOnboarding = false }
+            }
+        }
+    }
+
+    private var mainContent: some View {
         NavigationSplitView {
             SidebarView()
         } content: {
@@ -34,16 +68,12 @@ struct ContentView: View {
         }
         .toolbar {
             ToolbarItem(placement: .automatic) {
-                Text("Auralux")
-                    .font(.headline)
+                HStack(spacing: 12) {
+                    EngineStatusView()
+                    Text("Auralux")
+                        .font(.headline)
+                }
             }
-        }
-        .task {
-            guard !didBootstrap else { return }
-            didBootstrap = true
-            let presetService = PresetService(context: modelContext)
-            try? presetService.bootstrapFromBundleIfNeeded()
-            historyViewModel.refresh(context: modelContext)
         }
     }
 }

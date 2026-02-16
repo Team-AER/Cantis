@@ -1,71 +1,91 @@
 # Auralux
 
-Auralux is an open source macOS SwiftUI application scaffold for local AI music generation.
-It combines a native desktop client with a lightweight local Python API server used for generation job orchestration.
+Auralux is a native macOS application for AI music generation, powered by ACE-Step v1.5 running entirely on Apple Silicon. Generate music from text prompts and lyrics, with full playback, history, and multi-format export.
 
-## Project status
+## Features
 
-Auralux is currently in early-stage development. The current implementation focuses on architecture, workflow wiring, and local development ergonomics.
-
-## Current capabilities
-
-- Native macOS app shell built with SwiftUI + SwiftData.
-- Generation workflow (submit, poll, cancel) through a local HTTP bridge.
-- Queueing, preset management, and history tracking.
-- Basic playback/export scaffolding.
-- Local Python API server scaffold for `/health`, `/generate`, `/jobs/:id`, and cancellation.
-- Unit tests for core model, queue, and view-model behavior.
+- **Text-to-music generation** — describe the music you want and Auralux generates it locally
+- **Lyrics support** — write vocal tracks with verse/chorus structure
+- **Tag system** — genre, instrument, and mood tags for precise control
+- **Real-time playback** — waveform visualization and spectrum analyzer
+- **Multi-format export** — WAV, FLAC, MP3, AAC, ALAC with configurable settings
+- **Preset system** — save and reuse generation configurations
+- **Generation history** — browse, search, and favorite past generations
+- **On-device inference** — all processing on Apple Silicon, no cloud required
+- **Guided setup** — first-launch onboarding handles everything automatically
 
 ## System requirements
 
-- macOS 15+
-- Xcode 16+ (recommended) or Swift 6+
-- Python 3.10+
+- macOS 15+ (Sequoia)
+- Apple Silicon (M1 or later)
+- 8 GB RAM minimum (16 GB recommended)
+- ~6 GB disk space (for models and Python environment)
+- Internet connection (for initial setup and model download)
 
 ## Quick start
 
-1. Clone the repository.
-2. Start the local engine server:
+### Option 1: Launch the app (recommended)
+
+Build and run the app. On first launch, the built-in setup flow will:
+1. Clone ACE-Step 1.5 and install Python dependencies
+2. Start the local inference server
+3. Download AI models on first generation (~4 GB)
 
 ```bash
+swift run Auralux
+```
+
+Or open `Package.swift` in Xcode and run the Auralux target.
+
+### Option 2: Manual setup
+
+If you prefer to manage the engine separately:
+
+```bash
+# Set up the Python environment
 cd AuraluxEngine
+./setup_env.sh
+
+# Start the inference server
 ./start_api_server_macos.sh
 ```
 
-3. In another terminal, run tests:
+Then build and run the Swift app:
 
 ```bash
-cd /path/to/auralux
+swift run Auralux
+```
+
+## Running tests
+
+```bash
 swift test
 ```
 
-4. Open/build the app:
-
-- Open the package in Xcode and run the `Auralux` executable target, or
-- Run `swift run Auralux` from repository root.
-
 ## Project layout
 
-- `Auralux/` SwiftUI app source.
-- `AuraluxEngine/` local Python API server scaffold.
-- `AuraluxTests/` unit tests.
-- `docs/` architecture, development, and release guidance.
+- `Auralux/` — SwiftUI app (views, view models, services, models, components)
+- `AuraluxEngine/` — Python inference server wrapping ACE-Step v1.5
+- `AuraluxTests/` — unit tests
+- `docs/` — architecture, development, and release documentation
 
 ## Documentation
 
 - [Architecture](docs/ARCHITECTURE.md)
 - [Development Guide](docs/DEVELOPMENT.md)
+- [Pending Plan](docs/PENDING_PLAN.md)
 - [Release Checklist](docs/RELEASE_CHECKLIST.md)
-- [Engine README](AuraluxEngine/README.md)
-- [Contributing Guide](CONTRIBUTING.md)
-- [Security Policy](SECURITY.md)
-- [Code of Conduct](CODE_OF_CONDUCT.md)
-- [Support](SUPPORT.md)
 
-## Community and support
+## Technology
 
-- Bugs and feature requests: open a GitHub issue.
-- Security issues: follow `SECURITY.md` and report privately.
+| Layer | Technology |
+|-------|-----------|
+| UI | SwiftUI (macOS 15+) |
+| State | `@Observable`, SwiftData |
+| Inference | ACE-Step v1.5 (PyTorch MPS + MLX) |
+| Audio | AVAudioEngine, Accelerate (FFT) |
+| Export | AVFoundation |
+| Build | Swift Package Manager |
 
 ## License
 

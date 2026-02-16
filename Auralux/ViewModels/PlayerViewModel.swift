@@ -32,7 +32,7 @@ final class PlayerViewModel {
         guard let path else { return }
         errorMessage = nil
         do {
-            let url = URL(fileURLWithPath: path)
+            let url = FileUtilities.resolveAudioPath(path)
             try playerService.load(url: url)
             loadedPath = path
             Task {

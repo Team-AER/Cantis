@@ -1,4 +1,4 @@
-import AVFoundation
+@preconcurrency import AVFoundation
 import Foundation
 
 enum AudioExportFormat: String, CaseIterable, Identifiable, Codable {
@@ -53,7 +53,7 @@ struct AudioExportConfiguration: Codable, Sendable {
     var tags: [String]
 }
 
-final class AudioExportService {
+final class AudioExportService: Sendable {
     func export(sourceURL: URL, destinationDirectory: URL, configuration: AudioExportConfiguration) async throws -> URL {
         guard FileManager.default.fileExists(atPath: sourceURL.path) else {
             throw AudioExportError.invalidSource
@@ -163,7 +163,8 @@ final class AudioExportService {
         let readerOutput = AVAssetReaderTrackOutput(track: audioTrack, outputSettings: readerOutputSettings)
         assetReader.add(readerOutput)
 
-        guard let assetWriter = try? AVAssetWriter(outputURL: destination, fileType: avFileType(for: format)) else {
+        let fileType = try avFileType(for: format)
+        guard let assetWriter = try? AVAssetWriter(outputURL: destination, fileType: fileType) else {
             throw AudioExportError.transcodingFailed("Cannot create asset writer")
         }
 
@@ -196,10 +197,15 @@ final class AudioExportService {
         }
     }
 
-    private func avFileType(for format: AudioExportFormat) -> AVFileType {
+    private func avFileType(for format: AudioExportFormat) throws -> AVFileType {
         switch format {
         case .wav: return .wav
-        case .flac: return .flac
+        case .flac:
+            if #available(macOS 14.0, *) {
+                return AVFileType(rawValue: "public.flac")
+            } else {
+                throw AudioExportError.unsupported
+            }
         case .mp3: return .mp3
         case .aac: return .m4a
         case .alac: return .m4a

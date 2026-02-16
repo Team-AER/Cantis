@@ -118,6 +118,10 @@ final class GenerationViewModel {
             }
 
             if status.status == "completed" {
+                let storedPath: String? = {
+                    guard let raw = status.audioPath else { return nil }
+                    return FileUtilities.relativeAudioPath(from: raw)
+                }()
                 let track = GeneratedTrack(
                     title: request.prompt,
                     prompt: request.prompt,
@@ -127,7 +131,7 @@ final class GenerationViewModel {
                     variance: request.variance,
                     seed: request.seed,
                     generationID: jobID,
-                    audioFilePath: status.audioPath
+                    audioFilePath: storedPath
                 )
                 try historyService.insert(track)
                 lastTrack = track

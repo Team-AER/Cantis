@@ -112,6 +112,21 @@ def _ensure_initialized() -> bool:
                 lm_device = os.environ.get("ACESTEP_LM_DEVICE", device)
                 lm_offload = os.environ.get("ACESTEP_LM_OFFLOAD_TO_CPU", "false").lower() in ("1", "true", "yes")
 
+                # Ensure the LM model is downloaded (not part of main model auto-download)
+                try:
+                    from acestep.model_downloader import ensure_lm_model
+                    log.info("Ensuring LM model '%s' is available …", lm_model)
+                    dl_ok, dl_msg = ensure_lm_model(
+                        model_name=lm_model,
+                        checkpoints_dir=CHECKPOINTS_DIR,
+                    )
+                    if dl_ok:
+                        log.info("LM model check: %s", dl_msg)
+                    else:
+                        log.warning("LM model download failed: %s", dl_msg)
+                except Exception as exc:
+                    log.warning("LM model download check failed: %s", exc)
+
                 log.info("Initializing LLM handler (model=%s, backend=%s) …", lm_model, lm_backend)
                 try:
                     lm_status, lm_ok = llm.initialize(

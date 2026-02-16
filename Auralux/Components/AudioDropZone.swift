@@ -17,12 +17,12 @@ struct AudioDropZone: View {
                 .foregroundStyle(.secondary)
             }
             .frame(height: 140)
-            .onDrop(of: [UTType.audio.identifier], isTargeted: nil) { providers in
+            .onDrop(of: [.audio], isTargeted: nil) { providers in
                 guard let provider = providers.first else { return false }
                 provider.loadItem(forTypeIdentifier: UTType.fileURL.identifier, options: nil) { item, _ in
                     guard let data = item as? Data,
                           let url = URL(dataRepresentation: data, relativeTo: nil) else { return }
-                    Task { @MainActor in
+                    DispatchQueue.main.async {
                         selectedFileURL = url
                     }
                 }

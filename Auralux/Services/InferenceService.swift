@@ -45,6 +45,7 @@ enum InferenceError: Error, LocalizedError {
     case invalidResponse
     case requestFailed(String)
     case modelNotReady
+    case sandboxRestricted
 
     var errorDescription: String? {
         switch self {
@@ -60,48 +61,123 @@ enum InferenceError: Error, LocalizedError {
             return "Request failed: \(detail)"
         case .modelNotReady:
             return "Model is still downloading or not yet loaded."
+        case .sandboxRestricted:
+            return "Cannot launch server in App Sandbox. Start the Auralux Engine manually."
         }
     }
+}
+
+// MARK: - Server Launcher Protocol
+
+/// Abstracts how the inference server is started. Allows swapping between
+/// Process-based (dev/direct distribution) and XPC-based (App Store) strategies.
+protocol ServerLauncher: Sendable {
+    func launch() async throws
+    func stop() async
+    var isRunning: Bool { get async }
+}
+
+/// Launches the Python inference server as a subprocess.
+/// Works for development and direct (notarized) distribution.
+/// NOT compatible with the Mac App Store sandbox.
+final class ProcessServerLauncher: ServerLauncher, @unchecked Sendable {
+    private var process: Process?
+    private let lock = NSLock()
+
+    var isRunning: Bool {
+        lock.withLock { process?.isRunning ?? false }
+    }
+
+    func launch() async throws {
+        if isRunning { return }
+
+        guard !Self.isAppSandboxed else {
+            throw InferenceError.sandboxRestricted
+        }
+
+        guard let scriptURL = Self.locateServerScript(),
+              FileManager.default.fileExists(atPath: scriptURL.path) else {
+            throw InferenceError.serverScriptMissing
+        }
+
+        let proc = Process()
+        proc.executableURL = URL(fileURLWithPath: "/bin/zsh")
+        proc.arguments = [scriptURL.path]
+        proc.currentDirectoryURL = scriptURL.deletingLastPathComponent()
+        proc.standardOutput = Pipe()
+        proc.standardError = Pipe()
+
+        do {
+            try proc.run()
+            lock.withLock { process = proc }
+        } catch {
+            throw InferenceError.serverLaunchFailed
+        }
+    }
+
+    func stop() async {
+        lock.withLock {
+            guard let proc = process else { return }
+            if proc.isRunning { proc.terminate() }
+            process = nil
+        }
+    }
+
+    /// Detects whether the current process is running inside the App Sandbox.
+    private static var isAppSandboxed: Bool {
+        ProcessInfo.processInfo.environment["APP_SANDBOX_CONTAINER_ID"] != nil
+    }
+
+    private static func locateServerScript() -> URL? {
+        let candidates = [
+            URL(fileURLWithPath: FileManager.default.currentDirectoryPath)
+                .appendingPathComponent("AuraluxEngine/start_api_server_macos.sh"),
+            Bundle.main.bundleURL
+                .deletingLastPathComponent()
+                .appendingPathComponent("AuraluxEngine/start_api_server_macos.sh"),
+            Bundle.main.resourceURL?
+                .appendingPathComponent("AuraluxEngine/start_api_server_macos.sh"),
+        ].compactMap { $0 }
+
+        return candidates.first { FileManager.default.fileExists(atPath: $0.path) }
+    }
+}
+
+/// Placeholder for a future XPC-based launcher suitable for the Mac App Store.
+/// The XPC service would be a separate target bundled inside the .app that
+/// manages the Python runtime and inference server.
+final class XPCServerLauncher: ServerLauncher {
+    var isRunning: Bool { false }
+
+    func launch() async throws {
+        throw InferenceError.sandboxRestricted
+    }
+
+    func stop() async {}
 }
 
 // MARK: - Service
 
 actor InferenceService {
     private let baseURL: URL
-    private var serverProcess: Process?
+    private let launcher: ServerLauncher
 
-    init(baseURL: URL = AppConstants.inferenceBaseURL) {
+    init(
+        baseURL: URL = AppConstants.inferenceBaseURL,
+        launcher: ServerLauncher = ProcessServerLauncher()
+    ) {
         self.baseURL = baseURL
+        self.launcher = launcher
     }
 
     // MARK: Server lifecycle
 
     func startServerIfNeeded() async throws {
         if await isHealthy() { return }
-        if serverProcess?.isRunning == true { return }
+        if await launcher.isRunning { return }
 
-        let scriptURL = Self.locateServerScript()
+        try await launcher.launch()
 
-        guard let scriptURL, FileManager.default.fileExists(atPath: scriptURL.path) else {
-            throw InferenceError.serverScriptMissing
-        }
-
-        let process = Process()
-        process.executableURL = URL(fileURLWithPath: "/bin/zsh")
-        process.arguments = [scriptURL.path]
-        process.currentDirectoryURL = scriptURL.deletingLastPathComponent()
-        process.standardOutput = Pipe()
-        process.standardError = Pipe()
-
-        do {
-            try process.run()
-            serverProcess = process
-        } catch {
-            throw InferenceError.serverLaunchFailed
-        }
-
-        // ACE-Step 1.5 may need time to download models on first launch.
-        // Allow up to 5 minutes for the server to become healthy.
         let maxAttempts = 600
         for _ in 0..<maxAttempts {
             if await isHealthy() {
@@ -112,12 +188,8 @@ actor InferenceService {
         throw InferenceError.serverUnhealthy
     }
 
-    func stopServer() {
-        guard let process = serverProcess else { return }
-        if process.isRunning {
-            process.terminate()
-        }
-        serverProcess = nil
+    func stopServer() async {
+        await launcher.stop()
     }
 
     // MARK: Health
@@ -202,24 +274,5 @@ actor InferenceService {
         guard (200...299).contains(http.statusCode) else {
             throw InferenceError.requestFailed("model download trigger failed: \(http.statusCode)")
         }
-    }
-
-    // MARK: Helpers
-
-    private static func locateServerScript() -> URL? {
-        let candidates = [
-            URL(fileURLWithPath: FileManager.default.currentDirectoryPath)
-                .appendingPathComponent("AuraluxEngine/start_api_server_macos.sh"),
-            Bundle.main.bundleURL
-                .deletingLastPathComponent()
-                .appendingPathComponent("AuraluxEngine/start_api_server_macos.sh"),
-        ]
-
-        for candidate in candidates {
-            if FileManager.default.fileExists(atPath: candidate.path) {
-                return candidate
-            }
-        }
-        return nil
     }
 }
