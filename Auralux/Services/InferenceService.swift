@@ -46,6 +46,7 @@ enum InferenceError: Error, LocalizedError {
     case requestFailed(String)
     case modelNotReady
     case sandboxRestricted
+    case jobNotFound(String)
 
     var errorDescription: String? {
         switch self {
@@ -63,6 +64,8 @@ enum InferenceError: Error, LocalizedError {
             return "Model is still downloading or not yet loaded."
         case .sandboxRestricted:
             return "Cannot launch server in App Sandbox. Start the Auralux Engine manually."
+        case .jobNotFound(let jobID):
+            return "Job \(jobID) lost — the inference server crashed and restarted. Please try again."
         }
     }
 }
@@ -263,6 +266,9 @@ actor InferenceService {
         request.timeoutInterval = 10
         let (data, response) = try await URLSession.shared.data(for: request)
         guard let http = response as? HTTPURLResponse else { throw InferenceError.invalidResponse }
+        if http.statusCode == 404 {
+            throw InferenceError.jobNotFound(jobID)
+        }
         guard (200...299).contains(http.statusCode) else {
             throw InferenceError.requestFailed("poll failed: \(http.statusCode)")
         }

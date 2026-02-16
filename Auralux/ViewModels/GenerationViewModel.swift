@@ -172,6 +172,11 @@ final class GenerationViewModel {
             } catch is CancellationError {
                 throw CancellationError()
             } catch {
+                // If the server crashed and restarted, the job is gone — fail immediately
+                if case InferenceError.jobNotFound = error {
+                    log.error("Job lost — server crashed during generation", category: .generation)
+                    throw error
+                }
                 consecutiveErrors += 1
                 log.warning("Poll error (\(consecutiveErrors)/\(maxConsecutiveErrors)): \(error.localizedDescription)", category: .network)
                 if consecutiveErrors >= maxConsecutiveErrors {

@@ -41,6 +41,11 @@ logging.basicConfig(
 )
 log = logging.getLogger("auralux")
 
+# Ensure MPS fallback is enabled before any PyTorch import.
+# This prevents Metal shader assertion crashes (e.g. masked_fill on MPS)
+# by transparently routing unsupported ops to CPU.
+os.environ.setdefault("PYTORCH_ENABLE_MPS_FALLBACK", "1")
+
 # ---------------------------------------------------------------------------
 # Paths – resolve the cloned ACE-Step 1.5 repo so we can import `acestep`
 # ---------------------------------------------------------------------------

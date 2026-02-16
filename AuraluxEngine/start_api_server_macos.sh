@@ -35,6 +35,11 @@ fi
 
 # ── Environment variables for macOS Apple Silicon ────────────────────────
 
+# PyTorch MPS fallback — prevents Metal shader assertion crashes
+# (e.g. masked_fill_scalar_strided_32bit read-only binding error)
+# by transparently running unsupported ops on CPU instead.
+export PYTORCH_ENABLE_MPS_FALLBACK=1
+
 export ACESTEP_LM_BACKEND="${ACESTEP_LM_BACKEND:-mlx}"
 export TOKENIZERS_PARALLELISM="false"
 export ACESTEP_CONFIG_PATH="${ACESTEP_CONFIG_PATH:-acestep-v15-turbo}"
