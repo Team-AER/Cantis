@@ -1,0 +1,10 @@
+.DS_Store
+.build/
+.swiftpm/
+Package.resolved
+DerivedData/
+*.xcworkspace
+xcuserdata/
+*.swp
+AuraluxEngine/.venv/
+AuraluxEngine/__pycache__/

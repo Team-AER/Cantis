@@ -1,0 +1,29 @@
+[
+  {
+    "name": "Cinematic Lift",
+    "summary": "Wide, emotional trailer cue",
+    "prompt": "cinematic orchestral build with deep percussion and hopeful climax",
+    "lyricTemplate": "[verse]\nInstrumental\n[chorus]\nInstrumental",
+    "tags": ["cinematic", "orchestral", "uplifting"],
+    "duration": 45,
+    "variance": 0.4
+  },
+  {
+    "name": "Late Night Lofi",
+    "summary": "Warm vinyl and mellow keys",
+    "prompt": "lofi beat with dusty drums, soft keys, and tape wobble",
+    "lyricTemplate": "",
+    "tags": ["lofi", "jazz", "intimate"],
+    "duration": 30,
+    "variance": 0.55
+  },
+  {
+    "name": "Neon Drive",
+    "summary": "Retro electronic momentum",
+    "prompt": "synthwave track with pulsing bass arpeggios and gated snare",
+    "lyricTemplate": "",
+    "tags": ["electronic", "synth", "driving"],
+    "duration": 35,
+    "variance": 0.6
+  }
+]
