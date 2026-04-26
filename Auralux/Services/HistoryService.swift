@@ -37,4 +37,33 @@ final class HistoryService {
         track.isFavorite = isFavorite
         try context.save()
     }
+
+    func delete(_ track: GeneratedTrack) throws {
+        if let path = track.audioFilePath,
+           let url = FileUtilities.resolveAudioPath(path) {
+            try? FileManager.default.removeItem(at: url)
+        }
+        context.delete(track)
+        try context.save()
+    }
+
+    /// Removes audio files in the Generated directory that are not referenced
+    /// by any GeneratedTrack row. Safe to call on every launch.
+    func reconcileOrphans() throws {
+        let allTracks = try context.fetch(FetchDescriptor<GeneratedTrack>())
+        let referencedPaths = Set(allTracks.compactMap { $0.audioFilePath }.map {
+            FileUtilities.generatedAudioDirectory.appendingPathComponent($0).standardizedFileURL.path
+        })
+
+        let fm = FileManager.default
+        let dir = FileUtilities.generatedAudioDirectory
+        guard let enumerator = fm.enumerator(at: dir, includingPropertiesForKeys: [.isRegularFileKey]) else { return }
+        for case let fileURL as URL in enumerator {
+            let isFile = (try? fileURL.resourceValues(forKeys: [.isRegularFileKey]).isRegularFile) == true
+            guard isFile else { continue }
+            if !referencedPaths.contains(fileURL.standardizedFileURL.path) {
+                try? fm.removeItem(at: fileURL)
+            }
+        }
+    }
 }

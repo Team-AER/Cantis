@@ -49,6 +49,10 @@ struct HistoryBrowserView: View {
                             Button(track.isFavorite ? "Remove Favorite" : "Favorite") {
                                 viewModel.toggleFavorite(track, context: modelContext)
                             }
+                            Divider()
+                            Button("Delete", role: .destructive) {
+                                viewModel.delete(track, context: modelContext)
+                            }
                         }
                 }
                 .listStyle(.inset)

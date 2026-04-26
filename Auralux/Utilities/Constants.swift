@@ -5,8 +5,13 @@ enum AppConstants {
     static let minimumWindowWidth: Double = 1024
     static let minimumWindowHeight: Double = 768
 
-    // Inference server (our thin adapter wrapping ACE-Step 1.5)
-    static let inferenceBaseURL = URL(string: "http://127.0.0.1:8765")!
+    // Inference server (our thin adapter wrapping ACE-Step 1.5).
+    // Port is read from AURALUX_SERVER_PORT env var to match the server-side
+    // override documented in AGENTS.md and start_api_server_macos.sh.
+    static let inferenceBaseURL: URL = {
+        let port = ProcessInfo.processInfo.environment["AURALUX_SERVER_PORT"].flatMap(Int.init) ?? 8765
+        return URL(string: "http://127.0.0.1:\(port)")!
+    }()
 
     // ACE-Step 1.5 model configuration
     static let ditModelName = "acestep-v15-turbo"

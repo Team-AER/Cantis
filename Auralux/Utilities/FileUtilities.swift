@@ -59,17 +59,15 @@ enum FileUtilities {
         return url.lastPathComponent
     }
 
-    /// Resolves a stored audio path (which may be absolute for backwards
-    /// compatibility or relative) to a full URL on the current system.
-    static func resolveAudioPath(_ storedPath: String) -> URL {
+    /// Resolves a stored audio path (relative or legacy absolute) to a URL.
+    /// Returns nil if the resolved file does not exist on disk.
+    static func resolveAudioPath(_ storedPath: String) -> URL? {
+        let url: URL
         if storedPath.hasPrefix("/") {
-            let url = URL(fileURLWithPath: storedPath)
-            if FileManager.default.fileExists(atPath: url.path) {
-                return url
-            }
-            let fallback = generatedAudioDirectory.appendingPathComponent(url.lastPathComponent)
-            return fallback
+            url = URL(fileURLWithPath: storedPath)
+        } else {
+            url = generatedAudioDirectory.appendingPathComponent(storedPath)
         }
-        return generatedAudioDirectory.appendingPathComponent(storedPath)
+        return FileManager.default.fileExists(atPath: url.path) ? url : nil
     }
 }

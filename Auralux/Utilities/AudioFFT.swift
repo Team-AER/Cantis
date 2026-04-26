@@ -51,6 +51,10 @@ struct AudioFFT {
         vDSP_vsmul(magnitudes, 1, &scaleFactor, &magnitudes, 1, vDSP_Length(halfSize))
         vvsqrtf(&magnitudes, magnitudes, [Int32(halfSize)])
 
+        // Zero DC bin (bin 0) — it represents the mean offset of the signal
+        // and inflates low-frequency bars in the spectrum visualizer.
+        if !magnitudes.isEmpty { magnitudes[0] = 0 }
+
         // Normalize to 0...1 range based on peak
         var peak: Float = 0
         vDSP_maxv(magnitudes, 1, &peak, vDSP_Length(halfSize))

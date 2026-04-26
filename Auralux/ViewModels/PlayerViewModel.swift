@@ -37,8 +37,13 @@ final class PlayerViewModel {
         waveformTask?.cancel()
         waveformSamples = []
         log.info("PlayerViewModel load path=\(path)", category: .player)
+        guard let url = FileUtilities.resolveAudioPath(path) else {
+            loadedPath = nil
+            errorMessage = "Audio file not found."
+            log.warning("PlayerViewModel: audio file missing for path=\(path)", category: .player)
+            return
+        }
         do {
-            let url = FileUtilities.resolveAudioPath(path)
             try playerService.load(url: url)
             loadedPath = path
             waveformTask = Task {

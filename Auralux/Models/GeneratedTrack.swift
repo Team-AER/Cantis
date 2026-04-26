@@ -11,7 +11,9 @@ final class GeneratedTrack {
     var duration: TimeInterval
     var variance: Double
     var seed: Int?
-    var generationID: String
+    // Unique per-job identifier from the inference server; prevents duplicate
+    // persists if the poll loop fires more than once on the completed status.
+    @Attribute(.unique) var generationID: String
     var audioFilePath: String?
     var format: String
     var isFavorite: Bool
