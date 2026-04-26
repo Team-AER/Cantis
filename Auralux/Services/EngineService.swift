@@ -1,9 +1,11 @@
+import Darwin
 import Foundation
 import Observation
 
 /// Represents the overall state of the Auralux inference engine.
 enum EngineState: Equatable, Sendable {
     case unknown
+    case stopped
     case notSetup
     case settingUp(progress: String)
     case starting
@@ -20,6 +22,24 @@ enum EngineState: Equatable, Sendable {
         }
     }
     var needsSetup: Bool { self == .notSetup }
+    var isStopped: Bool { self == .stopped }
+}
+
+enum EnginePreparationError: LocalizedError {
+    case setupRequired
+    case busy
+    case startupFailed(String)
+
+    var errorDescription: String? {
+        switch self {
+        case .setupRequired:
+            return "Set up the inference engine before generating audio."
+        case .busy:
+            return "The inference engine is busy. Try again in a moment."
+        case .startupFailed(let message):
+            return message
+        }
+    }
 }
 
 /// Manages the full lifecycle of the Auralux inference engine:
@@ -31,16 +51,26 @@ final class EngineService {
     var state: EngineState = .unknown
     var setupLog: [String] = []
     var modelStatus: ModelStatus = .unknown
+    var runtimeStats: EngineRuntimeStats = .empty
+    var lastHealthCheckAt: Date?
+    var lastHealthLatency: TimeInterval?
+    var isControlActionRunning = false
+    private var isCheckingStatus = false
     /// Whether the onboarding SetupView is currently shown.
     /// Used to suppress duplicate error banners in other views.
     var isOnboarding = false
     var hasCompletedSetup: Bool {
         UserDefaults.standard.bool(forKey: Keys.setupCompleted)
     }
+    var isManagedServerRunning: Bool {
+        serverProcess?.isRunning == true
+    }
 
     private var serverProcess: Process?
     private var healthTask: Task<Void, Never>?
     private var setupProcess: Process?
+    private var didRequestManualStop = false
+    private var restartAttempts = 0
 
     private let inferenceService: InferenceService
     private let log = AppLogger.shared
@@ -121,6 +151,10 @@ final class EngineService {
     // MARK: - Status Check
 
     func checkStatus() async {
+        guard !isCheckingStatus else { return }
+        isCheckingStatus = true
+        defer { isCheckingStatus = false }
+
         guard let dir = engineDirectory else {
             log.warning("AuraluxEngine directory not found", category: .engine)
             state = .error("AuraluxEngine directory not found.")
@@ -148,13 +182,8 @@ final class EngineService {
             return
         }
 
-        if hasCompletedSetup {
-            log.info("Setup completed previously, attempting server start", category: .engine)
-            state = .notSetup
-            await startServer()
-        } else {
-            state = .notSetup
-        }
+        log.info("Engine is configured but not running", category: .engine)
+        state = .stopped
     }
 
     // MARK: - Setup
@@ -237,8 +266,7 @@ final class EngineService {
             appendLog("Setup completed successfully!")
             log.info("Engine setup completed successfully", category: .engine)
             UserDefaults.standard.set(true, forKey: Keys.setupCompleted)
-            state = .notSetup
-            await startServer()
+            state = .stopped
         } else {
             appendLog("Setup failed with exit code \(proc.terminationStatus)")
             log.error("Engine setup failed with exit code \(proc.terminationStatus)", category: .engine)
@@ -269,6 +297,14 @@ final class EngineService {
     // MARK: - Server Lifecycle
 
     func startServer() async {
+        guard !isControlActionRunning else { return }
+        isControlActionRunning = true
+        defer { isControlActionRunning = false }
+        didRequestManualStop = false
+        await startServerInternal()
+    }
+
+    private func startServerInternal() async {
         guard let engineDir = engineDirectory else {
             state = .error("AuraluxEngine directory not found.")
             return
@@ -322,7 +358,7 @@ final class EngineService {
             return
         }
 
-        let maxAttempts = 120 // 60 seconds
+        let maxAttempts = 600 // 5 minutes for cold Python imports and environment startup
         for attempt in 0..<maxAttempts {
             if await inferenceService.isHealthy() {
                 log.info("Server healthy after ~\(attempt / 2)s", category: .engine)
@@ -345,20 +381,59 @@ final class EngineService {
             try? await Task.sleep(for: .milliseconds(500))
         }
 
-        log.error("Server did not become healthy within 60 seconds", category: .engine)
-        state = .error("Server did not become healthy within 60 seconds.")
+        log.error("Server did not become healthy within 5 minutes", category: .engine)
+        state = .error("Server did not become healthy within 5 minutes.")
     }
 
-    func stopServer() {
+    func stopServer(allowExternalStop: Bool = true) {
+        didRequestManualStop = true
+        restartAttempts = 0
         healthTask?.cancel()
         healthTask = nil
 
         if let proc = serverProcess, proc.isRunning {
             proc.terminate()
-            appendLog("Server stopped.")
+            appendLog("Server stopping…")
+            // Escalate to SIGKILL after 5 s if the process hasn't exited.
+            // Done off the main thread so we don't block the UI.
+            let pid = proc.processIdentifier
+            Task.detached {
+                var waited = 0.0
+                while proc.isRunning && waited < 5.0 {
+                    try? await Task.sleep(for: .milliseconds(100))
+                    waited += 0.1
+                }
+                if proc.isRunning {
+                    kill(pid, SIGKILL)
+                }
+            }
+        } else if allowExternalStop, let pid = runtimeStats.pid, pid > 1 {
+            let killProcess = Process()
+            killProcess.executableURL = URL(fileURLWithPath: "/bin/kill")
+            killProcess.arguments = ["-TERM", "\(pid)"]
+            do {
+                try killProcess.run()
+                appendLog("Sent stop signal to inference server pid \(pid).")
+            } catch {
+                appendLog("Failed to stop inference server pid \(pid): \(error.localizedDescription)")
+            }
         }
         serverProcess = nil
-        state = .unknown
+        runtimeStats = .empty
+        lastHealthCheckAt = nil
+        lastHealthLatency = nil
+        state = .stopped
+    }
+
+    func restartServer() async {
+        guard !isControlActionRunning else { return }
+        isControlActionRunning = true
+        stopServer(allowExternalStop: true)
+        state = .starting
+        appendLog("Restarting inference server...")
+        try? await Task.sleep(for: .milliseconds(700))
+        await startServer()
+        isControlActionRunning = false
     }
 
     // MARK: - Health Monitoring
@@ -375,19 +450,36 @@ final class EngineService {
     }
 
     private func performHealthCheck() async {
-        let healthy = await inferenceService.isHealthy()
-        if healthy {
-            let health = await inferenceService.fetchHealth()
-            if let health {
-                updateModelStatus(from: health)
-                state = health.modelLoaded ? .ready : .running
-            }
+        let startedAt = Date()
+        if let health = await inferenceService.fetchHealth() {
+            lastHealthCheckAt = .now
+            lastHealthLatency = Date().timeIntervalSince(startedAt)
+            restartAttempts = 0
+            updateModelStatus(from: health)
+            state = health.modelLoaded ? .ready : .running
         } else {
             // Server might have crashed — check if process is still alive
             if let proc = serverProcess, !proc.isRunning {
-                appendLog("Server process died. Attempting restart...")
-                await startServer()
-            } else if serverProcess == nil {
+                guard !didRequestManualStop else {
+                    state = .stopped
+                    return
+                }
+                let maxRestarts = 3
+                guard restartAttempts < maxRestarts else {
+                    log.error("Server crashed \(maxRestarts) times without recovering — giving up", category: .engine)
+                    state = .error("Server crashed \(maxRestarts) times. Check logs and restart manually.")
+                    return
+                }
+                restartAttempts += 1
+                // 1st failure → 1 s, 2nd → 4 s, 3rd → 16 s then give up.
+                let backoffSeconds = pow(4.0, Double(restartAttempts - 1))
+                appendLog("Server process died (attempt \(restartAttempts)/\(maxRestarts)). Restarting in \(Int(backoffSeconds))s…")
+                try? await Task.sleep(for: .seconds(backoffSeconds))
+                await startServerInternal()
+            } else if serverProcess != nil {
+                appendLog("Inference server stopped responding.")
+                state = .error("Inference server stopped responding.")
+            } else if serverProcess == nil, !didRequestManualStop {
                 // External server went away
                 state = .error("Lost connection to inference server.")
             }
@@ -397,27 +489,78 @@ final class EngineService {
     // MARK: - Model Status
 
     func refreshModelStatus() async {
-        if let health = await inferenceService.fetchHealth() {
-            updateModelStatus(from: health)
+        await performHealthCheck()
+    }
+
+    func refreshNow() async {
+        if state.isRunning || state == .starting || serverProcess != nil {
+            await performHealthCheck()
+        } else {
+            await checkStatus()
         }
+    }
+
+    func prepareForGeneration() async throws {
+        if state == .unknown {
+            await checkStatus()
+        }
+
+        if state.isReady || state.isRunning {
+            return
+        }
+
+        if state.needsSetup {
+            isOnboarding = true
+            throw EnginePreparationError.setupRequired
+        }
+
+        guard !state.isBusy, !isControlActionRunning else {
+            throw EnginePreparationError.busy
+        }
+
+        await startServer()
+
+        if state.isReady || state.isRunning {
+            return
+        }
+
+        if case .error(let message) = state {
+            throw EnginePreparationError.startupFailed(message)
+        }
+
+        throw EnginePreparationError.startupFailed("Unable to start the inference server.")
     }
 
     func triggerModelDownload() async {
         do {
             try await inferenceService.triggerModelDownload()
             appendLog("Model download triggered.")
-            // Poll for completion
-            for _ in 0..<600 {
-                try? await Task.sleep(for: .seconds(1))
-                if let health = await inferenceService.fetchHealth(), health.modelLoaded {
-                    updateModelStatus(from: health)
-                    state = .ready
-                    appendLog("Models loaded successfully.")
-                    return
+            state = .settingUp(progress: "Downloading models…")
+            // Poll up to 30 min; surface progress via state so the UI can show it.
+            let maxAttempts = 1800
+            for attempt in 0..<maxAttempts {
+                // Propagate cancellation — do not swallow with try?
+                try await Task.sleep(for: .seconds(1))
+                if let health = await inferenceService.fetchHealth() {
+                    if health.modelLoaded {
+                        updateModelStatus(from: health)
+                        state = .ready
+                        appendLog("Models loaded successfully.")
+                        return
+                    }
+                    // Rough progress estimate: ramp 0→80% over 15 min, hold at 80% after that.
+                    let pct = min(80, Int(Double(attempt) / 900.0 * 80.0))
+                    state = .settingUp(progress: "Downloading models — \(pct)%")
                 }
             }
+            appendLog("Model download timed out.")
+            state = .error("Model download did not complete within 30 minutes.")
+        } catch is CancellationError {
+            // Task cancelled (e.g. app quit during download). Don't surface as an error.
+            if state != .ready { state = .running }
         } catch {
             appendLog("Model download failed: \(error.localizedDescription)")
+            state = .error("Model download failed: \(error.localizedDescription)")
         }
     }
 
@@ -431,19 +574,21 @@ final class EngineService {
             llmModel: health.llmModel ?? "",
             error: health.modelError
         )
+        runtimeStats = health.stats ?? .empty
     }
 
     // MARK: - Convenience
 
     /// Called when the app is about to quit.
     func shutdown() {
-        stopServer()
+        stopServer(allowExternalStop: false)
     }
 
     /// Attempts to connect to an already-running external server
     /// (useful when the user starts the server manually).
     func connectToExternalServer() async {
         if await inferenceService.isHealthy() {
+            didRequestManualStop = false
             state = .running
             startHealthMonitoring()
             await refreshModelStatus()

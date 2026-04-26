@@ -47,18 +47,24 @@ export ACESTEP_LM_MODEL_PATH="${ACESTEP_LM_MODEL_PATH:-acestep-5Hz-lm-0.6B}"
 export ACESTEP_DEVICE="${ACESTEP_DEVICE:-auto}"
 export ACESTEP_INIT_LLM="${ACESTEP_INIT_LLM:-auto}"
 
+# ── Memory profile ───────────────────────────────────────────────────────
+# Default: memory (fp16 MLX DiT + PyTorch DiT offloaded to CPU float16).
+# Override: export AURALUX_MEMORY_PROFILE=quality before launching.
+export AURALUX_MEMORY_PROFILE="${AURALUX_MEMORY_PROFILE:-memory}"
+
 echo "============================================"
 echo "  Auralux API — ACE-Step v1.5 (macOS)"
 echo "============================================"
 echo
-echo "  Port:       $PORT"
-echo "  DiT model:  $ACESTEP_CONFIG_PATH"
-echo "  LM model:   $ACESTEP_LM_MODEL_PATH"
-echo "  LM backend: $ACESTEP_LM_BACKEND"
-echo "  Device:     $ACESTEP_DEVICE"
+echo "  Port:        $PORT"
+echo "  DiT model:   $ACESTEP_CONFIG_PATH"
+echo "  LM model:    $ACESTEP_LM_MODEL_PATH"
+echo "  LM backend:  $ACESTEP_LM_BACKEND"
+echo "  Device:      $ACESTEP_DEVICE"
+echo "  Mem profile: $AURALUX_MEMORY_PROFILE"
 echo
 
 # ── Activate venv and run server ─────────────────────────────────────────
 
 source "$VENV_DIR/bin/activate"
-python "$SCRIPT_DIR/server.py" --port "$PORT"
+exec python "$SCRIPT_DIR/server.py" --port "$PORT"

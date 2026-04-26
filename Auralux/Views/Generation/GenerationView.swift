@@ -5,9 +5,14 @@ struct GenerationView: View {
     @Environment(EngineService.self) private var engine
     @Environment(\.modelContext) private var modelContext
     @State private var tagText = ""
+    @State private var completionDismissTask: Task<Void, Never>?
 
     private var engineReady: Bool {
-        engine.state.isReady || engine.state.isRunning
+        engine.state.isReady
+    }
+
+    private var generateDisabled: Bool {
+        viewModel.state.isBusy || engine.state.isBusy || engine.isControlActionRunning
     }
 
     var body: some View {
@@ -36,10 +41,10 @@ struct GenerationView: View {
 
                 HStack {
                     Button("Generate") {
-                        viewModel.generate(in: modelContext)
+                        viewModel.generate(in: modelContext, engine: engine)
                     }
                     .keyboardShortcut("g", modifiers: [.command])
-                    .disabled(viewModel.state.isBusy || !engineReady)
+                    .disabled(generateDisabled)
                     .accessibilityIdentifier("generate-button")
 
                     Button("Cancel") {
@@ -67,10 +72,32 @@ struct GenerationView: View {
                         Label("Done", systemImage: "checkmark.circle.fill")
                             .foregroundStyle(.green)
                             .accessibilityIdentifier("generation-status")
+                            .onAppear {
+                                completionDismissTask?.cancel()
+                                completionDismissTask = Task {
+                                    try? await Task.sleep(for: .seconds(3))
+                                    if !Task.isCancelled {
+                                        viewModel.state = .idle
+                                    }
+                                }
+                            }
+                            .onDisappear {
+                                completionDismissTask?.cancel()
+                            }
                     case .failed(let message):
-                        Label(message, systemImage: "exclamationmark.triangle.fill")
-                            .foregroundStyle(.red)
-                            .accessibilityIdentifier("generation-status")
+                        HStack(spacing: 6) {
+                            Label(message, systemImage: "exclamationmark.triangle.fill")
+                                .foregroundStyle(.red)
+                                .accessibilityIdentifier("generation-status")
+                            Button {
+                                viewModel.state = .idle
+                            } label: {
+                                Image(systemName: "xmark.circle.fill")
+                                    .foregroundStyle(.secondary)
+                            }
+                            .buttonStyle(.plain)
+                            .accessibilityLabel("Dismiss error")
+                        }
                     case .idle:
                         EmptyView()
                     }
@@ -104,6 +131,11 @@ struct GenerationView: View {
                     Task { await engine.runSetup() }
                 }
                 .controlSize(.small)
+            } else if engine.state.isStopped {
+                Button("Start Now") {
+                    Task { await engine.startServer() }
+                }
+                .controlSize(.small)
             } else if case .error = engine.state {
                 Button("Retry") {
                     Task { await engine.startServer() }
@@ -135,6 +167,7 @@ struct GenerationView: View {
         switch engine.state {
         case .notSetup: return "Engine Not Configured"
         case .settingUp: return "Setting Up..."
+        case .stopped: return "Engine Idle"
         case .starting: return "Server Starting..."
         case .error: return "Engine Error"
         default: return "Engine Not Ready"
@@ -147,6 +180,8 @@ struct GenerationView: View {
             return "Set up the inference engine to start generating music."
         case .settingUp(let progress):
             return progress
+        case .stopped:
+            return "The server stays offline until you generate audio. Starting generation will launch it automatically."
         case .starting:
             return "The inference server is starting up. This may take a moment."
         case .error(let message):

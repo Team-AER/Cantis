@@ -77,6 +77,10 @@ actor ModelManagerService {
         )
     }
 
+    func isServerHealthy() async -> Bool {
+        await inferenceService.isHealthy()
+    }
+
     /// Whether the server is running and has the DiT model loaded.
     func isModelReady() async -> Bool {
         let status = await fetchModelStatus()
@@ -91,18 +95,58 @@ actor ModelManagerService {
 
     /// Returns the list of known model artifacts for display in settings.
     static let knownArtifacts: [ModelArtifact] = [
+        // ── 2B DiT models ──────────────────────────────────────────────────
         ModelArtifact(
             name: "acestep-v15-turbo",
             repoID: "ACE-Step/Ace-Step1.5",
-            description: "DiT turbo model — 8-step inference, commercial-grade quality",
+            description: "DiT 2B turbo — 8-step inference, recommended for most Macs (≥6 GB VRAM)",
             estimatedSizeGB: 2.5
         ),
         ModelArtifact(
+            name: "acestep-v15-sft",
+            repoID: "ACE-Step/acestep-v15-sft",
+            description: "DiT 2B SFT — 50-step, higher quality than turbo (≥8 GB VRAM)",
+            estimatedSizeGB: 2.5
+        ),
+        // ── XL 4B DiT models ───────────────────────────────────────────────
+        ModelArtifact(
+            name: "acestep-v15-xl-turbo",
+            repoID: "ACE-Step/acestep-v15-xl-turbo",
+            description: "DiT XL turbo — 4B, 8-step, best quality; requires CPU offload below 20 GB VRAM",
+            estimatedSizeGB: 8.5
+        ),
+        ModelArtifact(
+            name: "acestep-v15-xl-sft",
+            repoID: "ACE-Step/acestep-v15-xl-sft",
+            description: "DiT XL SFT — 4B, 50-step, highest quality (≥20 GB VRAM recommended)",
+            estimatedSizeGB: 8.5
+        ),
+        ModelArtifact(
+            name: "acestep-v15-xl-base",
+            repoID: "ACE-Step/acestep-v15-xl-base",
+            description: "DiT XL base — 4B, supports extract / lego / complete modes (≥24 GB VRAM)",
+            estimatedSizeGB: 8.5
+        ),
+        // ── LM models ──────────────────────────────────────────────────────
+        ModelArtifact(
             name: "acestep-5Hz-lm-0.6B",
             repoID: "ACE-Step/acestep-5Hz-lm-0.6B",
-            description: "5Hz language model (0.6B) — metadata generation and CoT reasoning",
+            description: "5Hz LM 0.6B — CoT metadata + query rewriting (6–8 GB VRAM)",
             estimatedSizeGB: 1.2
         ),
+        ModelArtifact(
+            name: "acestep-5Hz-lm-1.7B",
+            repoID: "ACE-Step/acestep-5Hz-lm-1.7B",
+            description: "5Hz LM 1.7B — stronger composition and melody copying (8–16 GB VRAM)",
+            estimatedSizeGB: 3.4
+        ),
+        ModelArtifact(
+            name: "acestep-5Hz-lm-4B",
+            repoID: "ACE-Step/acestep-5Hz-lm-4B",
+            description: "5Hz LM 4B — best audio understanding and composition (≥24 GB VRAM)",
+            estimatedSizeGB: 8.0
+        ),
+        // ── Shared components ───────────────────────────────────────────────
         ModelArtifact(
             name: "vae",
             repoID: "ACE-Step/Ace-Step1.5",

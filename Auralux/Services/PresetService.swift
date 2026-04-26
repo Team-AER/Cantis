@@ -46,7 +46,9 @@ final class PresetService {
 
     func save(_ preset: Preset) throws {
         preset.updatedAt = .now
-        context.insert(preset)
+        if preset.modelContext == nil {
+            context.insert(preset)
+        }
         try context.save()
     }
 

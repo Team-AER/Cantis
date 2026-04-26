@@ -2,7 +2,9 @@ import Foundation
 
 enum FileUtilities {
     static var appSupportDirectory: URL {
-        let baseURL = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask).first!
+        guard let baseURL = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask).first else {
+            fatalError("Application Support directory is unavailable — cannot proceed.")
+        }
         let appURL = baseURL.appendingPathComponent(AppConstants.appName, isDirectory: true)
         if !FileManager.default.fileExists(atPath: appURL.path) {
             try? FileManager.default.createDirectory(at: appURL, withIntermediateDirectories: true)
@@ -20,6 +22,14 @@ enum FileUtilities {
 
     static var generatedAudioDirectory: URL {
         let url = appSupportDirectory.appendingPathComponent(AppConstants.generatedDirectoryName, isDirectory: true)
+        if !FileManager.default.fileExists(atPath: url.path) {
+            try? FileManager.default.createDirectory(at: url, withIntermediateDirectories: true)
+        }
+        return url
+    }
+
+    static var diagnosticsDirectory: URL {
+        let url = appSupportDirectory.appendingPathComponent(AppConstants.diagnosticsDirectoryName, isDirectory: true)
         if !FileManager.default.fileExists(atPath: url.path) {
             try? FileManager.default.createDirectory(at: url, withIntermediateDirectories: true)
         }
@@ -49,17 +59,15 @@ enum FileUtilities {
         return url.lastPathComponent
     }
 
-    /// Resolves a stored audio path (which may be absolute for backwards
-    /// compatibility or relative) to a full URL on the current system.
-    static func resolveAudioPath(_ storedPath: String) -> URL {
+    /// Resolves a stored audio path (relative or legacy absolute) to a URL.
+    /// Returns nil if the resolved file does not exist on disk.
+    static func resolveAudioPath(_ storedPath: String) -> URL? {
+        let url: URL
         if storedPath.hasPrefix("/") {
-            let url = URL(fileURLWithPath: storedPath)
-            if FileManager.default.fileExists(atPath: url.path) {
-                return url
-            }
-            let fallback = generatedAudioDirectory.appendingPathComponent(url.lastPathComponent)
-            return fallback
+            url = URL(fileURLWithPath: storedPath)
+        } else {
+            url = generatedAudioDirectory.appendingPathComponent(storedPath)
         }
-        return generatedAudioDirectory.appendingPathComponent(storedPath)
+        return FileManager.default.fileExists(atPath: url.path) ? url : nil
     }
 }

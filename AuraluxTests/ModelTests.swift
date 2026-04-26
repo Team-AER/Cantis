@@ -22,9 +22,9 @@ final class ModelTests: XCTestCase {
 
     func testGenerationParametersDefaultValues() {
         let defaults = GenerationParameters.default
-        XCTAssertEqual(defaults.prompt, "")
-        XCTAssertEqual(defaults.lyrics, "")
-        XCTAssertTrue(defaults.tags.isEmpty)
+        XCTAssertEqual(defaults.prompt, "chill lofi piano")
+        XCTAssertTrue(defaults.lyrics.contains("[verse]"))
+        XCTAssertEqual(defaults.tags, ["lofi", "piano", "chill"])
         XCTAssertEqual(defaults.duration, 30)
         XCTAssertEqual(defaults.variance, 0.5)
         XCTAssertNil(defaults.seed)
@@ -129,8 +129,11 @@ final class ModelTests: XCTestCase {
         XCTAssertEqual(AudioExportFormat.wav.fileExtension, "wav")
         XCTAssertEqual(AudioExportFormat.flac.fileExtension, "flac")
         XCTAssertEqual(AudioExportFormat.mp3.fileExtension, "mp3")
-        XCTAssertEqual(AudioExportFormat.aac.fileExtension, "aac")
-        XCTAssertEqual(AudioExportFormat.alac.fileExtension, "alac")
+        // AAC and ALAC use the MP4 container (.m4a) for compatibility with
+        // macOS/iOS media apps; the raw codec extension (.aac/.alac) is not
+        // a valid standalone container.
+        XCTAssertEqual(AudioExportFormat.aac.fileExtension, "m4a")
+        XCTAssertEqual(AudioExportFormat.alac.fileExtension, "m4a")
     }
 
     func testAudioExportFormatCodable() throws {

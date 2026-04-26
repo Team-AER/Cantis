@@ -29,44 +29,48 @@ struct ContentView: View {
 
             let presetService = PresetService(context: modelContext)
             try? presetService.bootstrapFromBundleIfNeeded()
+            try? await HistoryService(context: modelContext).reconcileOrphans()
             historyViewModel.refresh(context: modelContext)
 
             // Check engine status on launch
             await engineService.checkStatus()
-
-            if !engineService.state.isReady && !engineService.state.isRunning {
-                withAnimation { engineService.isOnboarding = true }
-            }
         }
-        .onChange(of: engineService.state) { _, newState in
-            if newState.isReady {
-                withAnimation { engineService.isOnboarding = false }
-            }
+    }
+
+    @ViewBuilder
+    private var playerPanel: some View {
+        if let selectedTrack = historyViewModel.selectedTrack ?? generationViewModel.lastTrack {
+            PlayerView(track: selectedTrack)
+        } else {
+            ContentUnavailableView("No Track Selected", systemImage: "music.note", description: Text("Generate or select a track to preview it."))
         }
     }
 
     private var mainContent: some View {
         NavigationSplitView {
             SidebarView()
-        } content: {
-            Group {
-                switch sidebarViewModel.selectedSection ?? .generate {
-                case .generate:
-                    GenerationView()
-                case .history:
-                    HistoryBrowserView()
-                case .audioToAudio:
-                    AudioImportView()
-                case .settings:
-                    SettingsView()
-                }
-            }
-            .navigationTitle(sidebarViewModel.selectedSection?.title ?? "Auralux")
         } detail: {
-            if let selectedTrack = historyViewModel.selectedTrack ?? generationViewModel.lastTrack {
-                PlayerView(track: selectedTrack)
-            } else {
-                ContentUnavailableView("No Track Selected", systemImage: "music.note", description: Text("Generate or select a track to preview it."))
+            HStack(spacing: 0) {
+                Group {
+                    switch sidebarViewModel.selectedSection ?? .generate {
+                    case .generate:
+                        GenerationView()
+                    case .history:
+                        HistoryBrowserView()
+                    case .audioToAudio:
+                        AudioImportView()
+                    case .settings:
+                        SettingsView()
+                    }
+                }
+                .navigationTitle(sidebarViewModel.selectedSection?.title ?? "Auralux")
+                .frame(maxWidth: .infinity)
+
+                if sidebarViewModel.selectedSection != .settings {
+                    Divider()
+                    playerPanel
+                        .frame(width: 320)
+                }
             }
         }
         .toolbar {
@@ -80,13 +84,10 @@ struct ContentView: View {
                 .keyboardShortcut("l", modifiers: [.command, .option])
             }
 
-            ToolbarItem(placement: .automatic) {
-                EngineStatusView()
-            }
+            ToolbarSpacer(.fixed)
 
             ToolbarItem(placement: .automatic) {
-                Text("Auralux")
-                    .font(.headline)
+                EngineStatusView()
             }
         }
     }

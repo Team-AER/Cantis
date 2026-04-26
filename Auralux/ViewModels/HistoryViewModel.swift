@@ -35,4 +35,15 @@ final class HistoryViewModel {
             errorMessage = error.localizedDescription
         }
     }
+
+    func delete(_ track: GeneratedTrack, context: ModelContext) {
+        let service = HistoryService(context: context)
+        if selectedTrack?.id == track.id { selectedTrack = nil }
+        do {
+            try service.delete(track)
+            refresh(context: context)
+        } catch {
+            errorMessage = error.localizedDescription
+        }
+    }
 }

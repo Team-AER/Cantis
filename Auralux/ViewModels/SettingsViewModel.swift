@@ -6,7 +6,6 @@ import Observation
 final class SettingsViewModel {
     enum QuantizationMode: String, CaseIterable, Identifiable {
         case fp16
-        case int8
 
         var id: String { rawValue }
     }
@@ -26,7 +25,10 @@ final class SettingsViewModel {
     var maxConcurrentJobs = 1 {
         didSet {
             let clamped = max(1, min(4, maxConcurrentJobs))
-            if maxConcurrentJobs != clamped { maxConcurrentJobs = clamped }
+            if maxConcurrentJobs != clamped {
+                maxConcurrentJobs = clamped  // triggers didSet once more with clamped value
+                return
+            }
             save(key: Keys.maxConcurrentJobs, value: clamped)
         }
     }
@@ -76,7 +78,8 @@ final class SettingsViewModel {
             maxConcurrentJobs = max(1, min(4, stored))
         }
         if let raw = defaults.string(forKey: Keys.defaultExportFormat),
-           let format = AudioExportFormat(rawValue: raw) {
+           let format = AudioExportFormat(rawValue: raw),
+           format.isAvailable {
             defaultExportFormat = format
         }
     }

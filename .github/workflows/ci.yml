@@ -7,13 +7,17 @@ on:
 jobs:
   swift-tests:
     name: Swift tests (macOS)
-    runs-on: macos-latest
+    # Pin to macOS 15 — app requires macOS 15+ and macos-latest may lag behind.
+    runs-on: macos-15
     steps:
       - name: Checkout
         uses: actions/checkout@v6
 
       - name: Show Swift version
         run: swift --version
+
+      - name: Build
+        run: swift build
 
       - name: Run tests
         run: swift test
@@ -30,5 +34,34 @@ jobs:
         with:
           python-version: "3.11"
 
-      - name: Validate server script
+      - name: Install minimal dependencies
+        run: pip install psutil
+
+      - name: Validate server script syntax
         run: python -m py_compile AuraluxEngine/server.py
+
+      - name: Server smoke test (no model loading)
+        run: |
+          ACESTEP_INIT_LLM=false python AuraluxEngine/server.py --port 18765 &
+          SERVER_PID=$!
+          # Wait up to 10 s for the server to accept connections.
+          for i in $(seq 1 10); do
+            sleep 1
+            if curl -sf http://127.0.0.1:18765/health > /dev/null 2>&1; then
+              echo "Server healthy after ${i}s"
+              break
+            fi
+          done
+          # Verify /health returns a valid JSON response.
+          HEALTH=$(curl -sf http://127.0.0.1:18765/health)
+          echo "Health response: $HEALTH"
+          echo "$HEALTH" | python -c "import sys, json; d=json.load(sys.stdin); assert d['status']=='ok', 'bad status'"
+          # Verify /generate rejects invalid input.
+          BAD=$(curl -sf -XPOST http://127.0.0.1:18765/generate \
+            -H 'Content-Type: application/json' \
+            -d '{"prompt":"x","duration":-1}' || true)
+          echo "Bad-input response: $BAD"
+          echo "$BAD" | python -c "import sys, json; d=json.load(sys.stdin); assert 'error' in d, 'expected error field'"
+          # Shut down cleanly.
+          kill $SERVER_PID
+          wait $SERVER_PID 2>/dev/null || true

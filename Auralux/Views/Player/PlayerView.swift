@@ -39,11 +39,19 @@ struct PlayerView: View {
                     viewModel.playPause()
                 }
                 .keyboardShortcut(.space, modifiers: [])
+                .accessibilityLabel(viewModel.isPlaying ? "Pause" : "Play")
                 .accessibilityIdentifier("play-pause-button")
+                .disabled(viewModel.errorMessage != nil)
 
                 Button("Stop") {
                     viewModel.stop()
                 }
+                .disabled(viewModel.errorMessage != nil)
+
+                Button("Capture RCA Log") {
+                    _ = viewModel.capturePlaybackDiagnostics(reason: "manual_capture_button")
+                }
+                .help("Write a playback diagnostics snapshot to Application Support/Auralux/Diagnostics")
 
                 @Bindable var vm = viewModel
                 Toggle("Loop", isOn: $vm.isLooping)
@@ -64,7 +72,7 @@ struct PlayerView: View {
             // Defer audio engine init to the next run-loop turn so it
             // doesn't collide with the SwiftUI/SwiftData update cycle
             // that surfaces this view (causes _dispatch_assert_queue_fail).
-            try? await Task.sleep(for: .milliseconds(50))
+            try? await Task.sleep(for: .milliseconds(200))
             guard !Task.isCancelled else { return }
             viewModel.load(path: track.audioFilePath)
         }

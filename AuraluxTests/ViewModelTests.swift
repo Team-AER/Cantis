@@ -14,24 +14,24 @@ final class ViewModelTests: XCTestCase {
         viewModel.addTag("ambient")
         viewModel.addTag("piano")
 
-        XCTAssertEqual(viewModel.tags, ["ambient", "piano"])
+        XCTAssertEqual(viewModel.tags, ["lofi", "piano", "chill", "ambient"])
 
         viewModel.removeTag("ambient")
-        XCTAssertEqual(viewModel.tags, ["piano"])
+        XCTAssertEqual(viewModel.tags, ["lofi", "piano", "chill"])
     }
 
     func testAddEmptyTagIsIgnored() {
         let viewModel = GenerationViewModel(inferenceService: InferenceService())
         viewModel.addTag("")
         viewModel.addTag("   ")
-        XCTAssertTrue(viewModel.tags.isEmpty)
+        XCTAssertEqual(viewModel.tags, ["lofi", "piano", "chill"])
     }
 
     func testRemoveNonexistentTagDoesNothing() {
         let viewModel = GenerationViewModel(inferenceService: InferenceService())
         viewModel.addTag("rock")
         viewModel.removeTag("jazz")
-        XCTAssertEqual(viewModel.tags, ["rock"])
+        XCTAssertEqual(viewModel.tags, ["lofi", "piano", "chill", "rock"])
     }
 
     // MARK: - GenerationViewModel Preset
@@ -67,13 +67,14 @@ final class ViewModelTests: XCTestCase {
         XCTAssertNil(viewModel.lastTrack)
     }
 
-    func testGenerateWithEmptyPromptFails() {
+    func testGenerateWithEmptyPromptFails() throws {
         let viewModel = GenerationViewModel(inferenceService: InferenceService())
         viewModel.prompt = "   "
 
         let config = ModelConfiguration(isStoredInMemoryOnly: true)
-        let container = try! ModelContainer(for: GeneratedTrack.self, Preset.self, Tag.self, configurations: config)
-        viewModel.generate(in: container.mainContext)
+        let container = try ModelContainer(for: GeneratedTrack.self, Preset.self, Tag.self, configurations: config)
+        let engine = EngineService(inferenceService: InferenceService())
+        viewModel.generate(in: container.mainContext, engine: engine)
 
         XCTAssertEqual(viewModel.state, .failed("Prompt is required."))
     }
@@ -86,6 +87,34 @@ final class ViewModelTests: XCTestCase {
         XCTAssertEqual(viewModel.state, .idle)
         XCTAssertEqual(viewModel.progress, 0)
         XCTAssertNil(viewModel.currentJobID)
+    }
+
+    func testGenerateWithEmptyPromptLeavesTaskNil() throws {
+        let viewModel = GenerationViewModel(inferenceService: InferenceService())
+        viewModel.prompt = ""
+
+        let config = ModelConfiguration(isStoredInMemoryOnly: true)
+        let container = try ModelContainer(for: GeneratedTrack.self, Preset.self, Tag.self, configurations: config)
+        let engine = EngineService(inferenceService: InferenceService())
+        viewModel.generate(in: container.mainContext, engine: engine)
+
+        // Empty-prompt guard returns before assigning generationTask.
+        // Cancelling immediately should not throw or crash.
+        viewModel.cancel()
+        XCTAssertEqual(viewModel.state, .idle)
+    }
+
+    func testSettingsMaxConcurrentJobsClampSavesOnce() {
+        let suiteName = "test-clamp-\(UUID().uuidString)"
+        let defaults = UserDefaults(suiteName: suiteName)!
+        defer { defaults.removePersistentDomain(forName: suiteName) }
+
+        let vm = SettingsViewModel(defaults: defaults)
+        vm.maxConcurrentJobs = 10  // triggers clamping to 4
+
+        XCTAssertEqual(vm.maxConcurrentJobs, 4)
+        // The saved value should be 4, not 10.
+        XCTAssertEqual(defaults.integer(forKey: "settings.maxConcurrentJobs"), 4)
     }
 
     // MARK: - GenerationState
@@ -120,16 +149,28 @@ final class ViewModelTests: XCTestCase {
         vm1.lowMemoryMode = true
         vm1.autoStartServer = false
         vm1.maxConcurrentJobs = 3
-        vm1.defaultExportFormat = .flac
+        vm1.defaultExportFormat = .alac  // .flac is unavailable, use .alac
 
         let vm2 = SettingsViewModel(defaults: defaults)
         XCTAssertEqual(vm2.quantizationMode, .int8)
         XCTAssertTrue(vm2.lowMemoryMode)
         XCTAssertFalse(vm2.autoStartServer)
         XCTAssertEqual(vm2.maxConcurrentJobs, 3)
-        XCTAssertEqual(vm2.defaultExportFormat, .flac)
+        XCTAssertEqual(vm2.defaultExportFormat, .alac)
 
         defaults.removePersistentDomain(forName: suiteName)
+    }
+
+    func testSettingsUnavailableExportFormatFallsBackToWAV() {
+        let suiteName = "test-unavailable-\(UUID().uuidString)"
+        let defaults = UserDefaults(suiteName: suiteName)!
+        defer { defaults.removePersistentDomain(forName: suiteName) }
+
+        // Manually persist an unavailable format value as if it was saved by an older build.
+        defaults.set(AudioExportFormat.flac.rawValue, forKey: "settings.defaultExportFormat")
+
+        let vm = SettingsViewModel(defaults: defaults)
+        XCTAssertEqual(vm.defaultExportFormat, .wav, "Unavailable format should fall back to .wav")
     }
 
     func testSettingsMaxConcurrentJobsClamped() {

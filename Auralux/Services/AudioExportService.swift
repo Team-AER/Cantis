@@ -9,7 +9,22 @@ enum AudioExportFormat: String, CaseIterable, Identifiable, Codable {
     case alac
 
     var id: String { rawValue }
-    var fileExtension: String { rawValue }
+
+    /// Whether the system can encode this format via AVAssetWriter.
+    /// MP3 and FLAC are unsupported — they crash if passed to AVAssetWriter.
+    var isAvailable: Bool {
+        switch self {
+        case .mp3, .flac: return false
+        default: return true
+        }
+    }
+
+    var fileExtension: String {
+        switch self {
+        case .aac, .alac: return "m4a"
+        default: return rawValue
+        }
+    }
 
     var audioFormatID: AudioFormatID {
         switch self {
@@ -59,7 +74,7 @@ final class AudioExportService: Sendable {
             throw AudioExportError.invalidSource
         }
 
-        let name = "\(configuration.title.replacingOccurrences(of: " ", with: "_"))_\(UUID().uuidString.prefix(8)).\(configuration.format.fileExtension)"
+        let name = "\(sanitizedFilename(configuration.title))_\(UUID().uuidString.prefix(8)).\(configuration.format.fileExtension)"
         let destination = destinationDirectory.appendingPathComponent(name)
 
         switch configuration.format {
@@ -137,10 +152,6 @@ final class AudioExportService: Sendable {
 
         removeExistingFile(at: destination)
 
-        guard let outputFormatDescription = AVAudioFormat(settings: outputSettings) else {
-            throw AudioExportError.transcodingFailed("Cannot create output audio format")
-        }
-
         let asset = AVURLAsset(url: source)
         guard let assetReader = try? AVAssetReader(asset: asset) else {
             throw AudioExportError.transcodingFailed("Cannot create asset reader")
@@ -168,11 +179,16 @@ final class AudioExportService: Sendable {
             throw AudioExportError.transcodingFailed("Cannot create asset writer")
         }
 
-        let writerInput = AVAssetWriterInput(mediaType: .audio, outputSettings: outputSettings, sourceFormatHint: outputFormatDescription.formatDescription)
+        // sourceFormatHint describes the PCM samples we feed in, not the output codec.
+        // Passing the output (compressed) format here was causing AVAssetWriter to fail.
+        let writerInput = AVAssetWriterInput(mediaType: .audio, outputSettings: outputSettings)
         assetWriter.add(writerInput)
 
         assetReader.startReading()
-        assetWriter.startWriting()
+        guard assetWriter.startWriting() else {
+            throw AudioExportError.transcodingFailed(
+                assetWriter.error?.localizedDescription ?? "Cannot start writing")
+        }
         assetWriter.startSession(atSourceTime: .zero)
 
         return try await withCheckedThrowingContinuation { continuation in
@@ -201,12 +217,13 @@ final class AudioExportService: Sendable {
         switch format {
         case .wav: return .wav
         case .flac:
-            if #available(macOS 14.0, *) {
-                return AVFileType(rawValue: "public.flac")
-            } else {
-                throw AudioExportError.unsupported
-            }
-        case .mp3: return .mp3
+            // AVAssetWriter does not support FLAC output — public.flac is absent from
+            // its supported-UTI list and attempting to use it crashes with NSInvalidArgumentException.
+            throw AudioExportError.unsupported
+        case .mp3:
+            // AVAssetWriter does not support MP3 encoding (licensed codec, not
+            // shipped by Apple). public.mp3 is absent from its supported-UTI list.
+            throw AudioExportError.unsupported
         case .aac: return .m4a
         case .alac: return .m4a
         }
@@ -221,5 +238,16 @@ final class AudioExportService: Sendable {
         if FileManager.default.fileExists(atPath: url.path) {
             try? FileManager.default.removeItem(at: url)
         }
+    }
+
+    private func sanitizedFilename(_ title: String) -> String {
+        let illegal = CharacterSet(charactersIn: "/\\:*?\"<>|")
+        let sanitized = title
+            .components(separatedBy: illegal)
+            .joined(separator: "_")
+            .replacingOccurrences(of: " ", with: "_")
+            .trimmingCharacters(in: CharacterSet(charactersIn: "_"))
+        let limited = String(sanitized.prefix(80))
+        return limited.isEmpty ? "track" : limited
     }
 }

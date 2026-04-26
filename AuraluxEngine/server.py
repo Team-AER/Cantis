@@ -34,17 +34,37 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
+MAX_REQUEST_BYTES = 1_000_000  # 1 MB cap on incoming request bodies
+
 logging.basicConfig(
     level=logging.INFO,
     format="[%(asctime)s] %(levelname)s %(message)s",
     datefmt="%H:%M:%S",
 )
 log = logging.getLogger("auralux")
+STARTED_AT = time.time()
 
 # Ensure MPS fallback is enabled before any PyTorch import.
 # This prevents Metal shader assertion crashes for *unsupported* MPS ops
 # by transparently routing them to CPU.
 os.environ.setdefault("PYTORCH_ENABLE_MPS_FALLBACK", "1")
+
+# ---------------------------------------------------------------------------
+# Memory profile — applied before ACE-Step imports so env vars are in place
+# when handler.py reads them during model init.
+#
+#   quality  (default ≥24 GB): MLX DiT fp16, PyTorch DiT → CPU float32.
+#   memory   (auto ≤16 GB):    MLX DiT fp16, PyTorch DiT → CPU float16.
+#
+# All generation features remain enabled in both profiles.
+# ---------------------------------------------------------------------------
+_MEMORY_PROFILE = os.environ.get("AURALUX_MEMORY_PROFILE", "quality").lower()
+if _MEMORY_PROFILE == "memory":
+    os.environ.setdefault("ACESTEP_MLX_DTYPE", "float16")
+    os.environ.setdefault("ACESTEP_TORCH_DIT_CPU_FP16", "1")
+else:
+    os.environ.setdefault("ACESTEP_MLX_DTYPE", "float32")
+    os.environ.setdefault("ACESTEP_TORCH_DIT_CPU_FP16", "0")
 
 # ---------------------------------------------------------------------------
 # Monkey-patch: masked_fill on MPS
@@ -232,12 +252,18 @@ def _patch_mps_text_encoder_embed() -> None:
             return _orig_infer_text(self, text_token_idss)
 
         mps_dev = self.device
+        # Capture dtype before device move; CPU kernels may silently upcast
+        # float16 → float32, so we must restore it on the way back.
+        try:
+            target_dtype = next(self.text_encoder.parameters()).dtype
+        except StopIteration:
+            target_dtype = torch.float16
         self.text_encoder.cpu()
         try:
             cpu_ids = text_token_idss.cpu() if hasattr(text_token_idss, "cpu") else text_token_idss
             with torch.inference_mode():
                 result = self.text_encoder(input_ids=cpu_ids, lyric_attention_mask=None).last_hidden_state
-            return result.to(mps_dev)
+            return result.to(dtype=target_dtype, device=mps_dev)
         finally:
             self.text_encoder.to(mps_dev)
 
@@ -246,12 +272,16 @@ def _patch_mps_text_encoder_embed() -> None:
             return _orig_infer_lyric(self, lyric_token_ids)
 
         mps_dev = self.device
+        try:
+            target_dtype = next(self.text_encoder.parameters()).dtype
+        except StopIteration:
+            target_dtype = torch.float16
         self.text_encoder.cpu()
         try:
             cpu_ids = lyric_token_ids.cpu() if hasattr(lyric_token_ids, "cpu") else lyric_token_ids
             with torch.inference_mode():
                 result = self.text_encoder.embed_tokens(cpu_ids)
-            return result.to(mps_dev)
+            return result.to(dtype=target_dtype, device=mps_dev)
         finally:
             self.text_encoder.to(mps_dev)
 
@@ -318,6 +348,15 @@ def _patch_mps_prepare_condition(model_instance) -> None:
             if mod is not None:
                 modules.append(mod)
 
+        # Capture each module's current device so we restore correctly when
+        # the PyTorch DiT has already been offloaded to CPU by _offload_torch_dit_to_cpu.
+        orig_devices = []
+        for m in modules:
+            try:
+                orig_devices.append(next(m.parameters()).device)
+            except StopIteration:
+                orig_devices.append(torch.device("cpu"))
+
         for m in modules:
             m.cpu()
 
@@ -342,13 +381,47 @@ def _patch_mps_prepare_condition(model_instance) -> None:
                 else result
             )
         finally:
-            for m in modules:
-                m.to(mps_device)
+            # Restore each module to its original device (CPU→CPU is a no-op;
+            # MPS→MPS restores the old behaviour when MLX is not active).
+            for m, orig_dev in zip(modules, orig_devices):
+                m.to(orig_dev)
 
     model_cls.prepare_condition = _cpu_safe_prepare_condition
     log.info(
         "Patched %s.prepare_condition for MPS safety (CPU fallback)",
         model_cls.__name__,
+    )
+
+
+# ---------------------------------------------------------------------------
+# Monkey-patch: AudioTokenDetokenizer dtype normalisation on MPS
+# ---------------------------------------------------------------------------
+# _prepare_target_latents_and_wavs calls AudioTokenDetokenizer.forward directly
+# (not through _decode_audio_codes_to_latents), so the existing audio-code-decode
+# patch does not cover this path.  MPS CPU-fallback ops silently upcast float16
+# tensors to float32; if that upcasted tensor then hits a float16 Linear weight,
+# PyTorch raises "mat1 and mat2 must have the same dtype, but got Float and Half".
+# The cast is a no-op when dtypes already match (quality / float32 profile).
+
+
+def _patch_mps_audio_token_detokenizer(model) -> None:
+    """Patch AudioTokenDetokenizer.forward to normalise input dtype on MPS."""
+    if model is None or not hasattr(model, "detokenizer"):
+        return
+
+    detokenizer = model.detokenizer
+    detokenizer_cls = type(detokenizer)
+    _orig_forward = detokenizer_cls.forward
+
+    def _dtype_safe_forward(self, x):  # type: ignore[override]
+        weight = getattr(getattr(self, "embed_tokens", None), "weight", None)
+        if weight is not None and x.dtype != weight.dtype:
+            x = x.to(weight.dtype)
+        return _orig_forward(self, x)
+
+    detokenizer_cls.forward = _dtype_safe_forward
+    log.info(
+        "Patched %s.forward for MPS dtype safety", detokenizer_cls.__name__
     )
 
 
@@ -368,6 +441,7 @@ if ACE_STEP_DIR.is_dir():
 # ---------------------------------------------------------------------------
 
 _init_lock = threading.Lock()
+_inference_lock = threading.Lock()  # serialises generate_music() calls; one job at a time
 _dit_handler: Optional[Any] = None
 _llm_handler: Optional[Any] = None
 _init_error: Optional[str] = None
@@ -418,6 +492,7 @@ def _ensure_initialized() -> bool:
             # with trust_remote_code=True, so we must patch after loading.
             if dit.model is not None:
                 _patch_mps_prepare_condition(dit.model)
+                _patch_mps_audio_token_detokenizer(dit.model)
 
             _dit_handler = dit
 
@@ -513,8 +588,77 @@ class JobStore:
             for key, value in kwargs.items():
                 setattr(job, key, value)
 
+    def status_counts(self) -> Dict[str, int]:
+        with self._lock:
+            counts: Dict[str, int] = {}
+            for job in self._jobs.values():
+                counts[job.status] = counts.get(job.status, 0) + 1
+            return counts
+
 
 JOBS = JobStore()
+
+
+def _process_stats() -> Dict[str, Any]:
+    pid = os.getpid()
+    stats: Dict[str, Any] = {
+        "pid": pid,
+        "uptimeSeconds": round(time.time() - STARTED_AT, 1),
+        "activeThreads": threading.active_count(),
+        "jobCounts": JOBS.status_counts(),
+    }
+
+    try:
+        import psutil
+        proc = psutil.Process(pid)
+        stats["cpuPercent"] = proc.cpu_percent(interval=None)
+        rss_bytes = proc.memory_info().rss
+        stats["memoryRSSMB"] = round(rss_bytes / (1024 * 1024), 1)
+
+        # psutil RSS on macOS uses task_basic_info which excludes Metal/IOSurface
+        # buffer mappings (where model weights live).  Activity Monitor uses
+        # phys_footprint which includes them — hence the large gap.
+        # We reconstruct the full footprint by adding:
+        #   • PyTorch MPS driver allocation  (PyTorch's Metal heap)
+        #   • MLX active + cached memory     (MLX's separate Metal heap)
+        metal_bytes = 0
+        try:
+            import torch
+            if torch.backends.mps.is_available():
+                metal_bytes += torch.mps.driver_allocated_memory()
+        except Exception:
+            pass
+        try:
+            import mlx.core as mx
+            metal_bytes += mx.get_active_memory() + mx.get_cache_memory()
+        except Exception:
+            pass
+        stats["totalMemoryMB"] = round((rss_bytes + metal_bytes) / (1024 * 1024), 1)
+    except Exception as exc:
+        stats["statsError"] = str(exc)
+
+    return stats
+
+
+def _memory_diagnostics() -> Dict[str, Any]:
+    """Return memory-related diagnostics for the /health endpoint."""
+    diag: Dict[str, Any] = {
+        "profile": os.environ.get("AURALUX_MEMORY_PROFILE", "quality"),
+        "mlxDtype": os.environ.get("ACESTEP_MLX_DTYPE", "float32"),
+        "torchDitOnCpu": getattr(_dit_handler, "_torch_dit_cpu", False),
+        "mlxDitLoaded": getattr(_dit_handler, "use_mlx_dit", False),
+        "mlxVaeLoaded": getattr(_dit_handler, "use_mlx_vae", False),
+        "inferenceActive": _inference_lock.locked(),
+    }
+    try:
+        import torch
+        if torch.backends.mps.is_available():
+            diag["mpsCacheAllocatedMB"] = round(
+                torch.mps.current_allocated_memory() / 1048576, 1
+            )
+    except Exception:
+        pass
+    return diag
 
 
 # ---------------------------------------------------------------------------
@@ -601,6 +745,16 @@ def _run_job(
         else:
             _run_stub_inference(job_id, prompt, duration, output_path)
 
+        job = JOBS.get(job_id)
+        if job and job.cancelled:
+            JOBS.update(
+                job_id,
+                status="cancelled",
+                progress=0.0,
+                message="Job cancelled",
+            )
+            return
+
         JOBS.update(
             job_id,
             status="completed",
@@ -609,12 +763,11 @@ def _run_job(
             audio_path=str(output_path),
         )
     except Exception as exc:
-        log.error("Generation failed for job %s: %s", job_id, exc)
-        traceback.print_exc()
+        log.error("Generation failed for job %s: %s\n%s", job_id, exc, traceback.format_exc())
         JOBS.update(
             job_id,
             status="failed",
-            message=f"Generation error: {exc}",
+            message=f"Generation failed: {type(exc).__name__}: {exc}",
         )
 
 
@@ -642,7 +795,35 @@ def _run_real_inference(
     if tags:
         caption = ", ".join(tags) + ". " + caption
 
-    JOBS.update(job_id, progress=0.10, message="Preparing generation …")
+    # Acquire the inference lock before touching the model.  A second request
+    # waits here rather than loading a second copy into Metal.
+    JOBS.update(job_id, progress=0.10, message="Waiting for model (serialised) …")
+    with _inference_lock:
+        _run_real_inference_locked(
+            job_id=job_id,
+            caption=caption,
+            lyrics=lyrics,
+            duration=duration,
+            variance=variance,
+            seed=seed,
+            output_path=output_path,
+        )
+
+
+def _run_real_inference_locked(
+    *,
+    job_id: str,
+    caption: str,
+    lyrics: str,
+    duration: float,
+    variance: float,
+    seed: Optional[int],
+    output_path: Path,
+) -> None:
+    """Inner body of _run_real_inference, called while _inference_lock is held."""
+    from acestep.inference import GenerationParams, GenerationConfig, generate_music
+
+    JOBS.update(job_id, progress=0.12, message="Preparing generation …")
 
     use_random = seed is None or seed < 0
     actual_seed = seed if not use_random else -1
@@ -687,6 +868,13 @@ def _run_real_inference(
         except Exception as exc:
             inference_result["error"] = exc
         finally:
+            # Release Metal/MLX caches after each generation to reduce
+            # fragmentation and free transient activation memory.
+            if _dit_handler is not None and hasattr(_dit_handler, "_post_generation_cleanup"):
+                try:
+                    _dit_handler._post_generation_cleanup()
+                except Exception:
+                    pass
             inference_done.set()
 
     worker = threading.Thread(target=_do_inference, daemon=True)
@@ -703,7 +891,9 @@ def _run_real_inference(
     while not inference_done.wait(timeout=tick):
         job = JOBS.get(job_id)
         if job and job.cancelled:
-            log.info("Job %s cancelled during inference", job_id)
+            log.info("Job %s cancelled during inference — waiting for inference thread", job_id)
+            inference_done.wait()  # wait for the thread to finish before returning
+            JOBS.update(job_id, status="cancelled", progress=0.0, message="Job cancelled")
             return
 
         elapsed += tick
@@ -715,6 +905,12 @@ def _run_real_inference(
             progress=round(current, 3),
             message=f"Generating audio … {pct}%",
         )
+
+    # Check cancellation one final time — may have been set while inference was finishing.
+    job = JOBS.get(job_id)
+    if job and job.cancelled:
+        JOBS.update(job_id, status="cancelled", progress=0.0, message="Job cancelled")
+        return
 
     if "error" in inference_result:
         raise inference_result["error"]
@@ -777,11 +973,29 @@ def _run_stub_inference(
 class Handler(BaseHTTPRequestHandler):
     server_version = "AuraluxServer/1.5"
 
-    def _read_json(self) -> Dict[str, object]:
-        length = int(self.headers.get("Content-Length", "0"))
+    def _read_json(self) -> Optional[Dict[str, object]]:
+        """Read and parse the request body as JSON.
+
+        Returns the parsed dict, or None when a response has already been sent
+        to the client (caller must return immediately without sending another).
+        """
+        try:
+            length = int(self.headers.get("Content-Length", "0"))
+        except (TypeError, ValueError):
+            length = 0
         if length <= 0:
             return {}
-        return json.loads(self.rfile.read(length).decode("utf-8"))
+        if length > MAX_REQUEST_BYTES:
+            self._send_json(
+                {"error": f"request body too large (max {MAX_REQUEST_BYTES} bytes)"},
+                HTTPStatus.REQUEST_ENTITY_TOO_LARGE,
+            )
+            return None
+        try:
+            return json.loads(self.rfile.read(length).decode("utf-8"))
+        except (json.JSONDecodeError, UnicodeDecodeError) as exc:
+            self._send_json({"error": f"invalid JSON: {exc}"}, HTTPStatus.BAD_REQUEST)
+            return None
 
     def _send_json(self, payload: Dict[str, object], status: HTTPStatus = HTTPStatus.OK) -> None:
         body = json.dumps(payload).encode("utf-8")
@@ -806,6 +1020,8 @@ class Handler(BaseHTTPRequestHandler):
                 "engine": "ace-step-v1.5",
                 "ditModel": os.environ.get("ACESTEP_CONFIG_PATH", "acestep-v15-turbo"),
                 "llmModel": os.environ.get("ACESTEP_LM_MODEL_PATH", "acestep-5Hz-lm-0.6B"),
+                "stats": _process_stats(),
+                "memory": _memory_diagnostics(),
             })
             return
 
@@ -829,11 +1045,29 @@ class Handler(BaseHTTPRequestHandler):
     def do_POST(self) -> None:
         if self.path == "/generate":
             payload = self._read_json()
-            prompt = str(payload.get("prompt", ""))
+            if payload is None:
+                return
+
+            prompt = str(payload.get("prompt", "")).strip()
             lyrics = str(payload.get("lyrics", ""))
             tags = list(payload.get("tags", []))
-            duration = float(payload.get("duration", 30))
-            variance = float(payload.get("variance", 0.5))
+
+            try:
+                duration = float(payload.get("duration", 30))
+                if not (0 < duration <= 600):
+                    raise ValueError(f"duration must be between 0 and 600, got {duration}")
+            except (TypeError, ValueError) as exc:
+                self._send_json({"error": str(exc)}, HTTPStatus.BAD_REQUEST)
+                return
+
+            try:
+                variance = float(payload.get("variance", 0.5))
+                if not (0 <= variance <= 2):
+                    raise ValueError(f"variance must be between 0 and 2, got {variance}")
+            except (TypeError, ValueError) as exc:
+                self._send_json({"error": str(exc)}, HTTPStatus.BAD_REQUEST)
+                return
+
             seed_raw = payload.get("seed")
             seed = int(seed_raw) if seed_raw is not None else None
 
@@ -869,12 +1103,28 @@ class Handler(BaseHTTPRequestHandler):
         self._send_json({"error": "not found"}, HTTPStatus.NOT_FOUND)
 
     def log_message(self, format: str, *args: object) -> None:
-        log.debug(format, *args)
+        msg = format % args
+        # Log non-2xx responses at INFO so HTTP errors are visible without
+        # changing the global log level.
+        if args and isinstance(args[1], str) and not args[1].startswith("2"):
+            log.info(msg)
+        else:
+            log.debug(msg)
 
 
 # ---------------------------------------------------------------------------
 # Main
 # ---------------------------------------------------------------------------
+
+class AuraluxHTTPServer(ThreadingHTTPServer):
+    """ThreadingHTTPServer with socket reuse and daemon request threads.
+
+    allow_reuse_address prevents TIME_WAIT from blocking a restart after a crash.
+    daemon_threads ensures request threads are torn down when the main thread exits.
+    """
+    allow_reuse_address = True
+    daemon_threads = True
+
 
 def main() -> None:
     parser = argparse.ArgumentParser(description="Auralux API server (ACE-Step v1.5)")
@@ -886,7 +1136,7 @@ def main() -> None:
         log.info("Preloading model …")
         _ensure_initialized()
 
-    server = ThreadingHTTPServer(("127.0.0.1", args.port), Handler)
+    server = AuraluxHTTPServer(("127.0.0.1", args.port), Handler)
     log.info("Auralux API server listening on http://127.0.0.1:%d", args.port)
     try:
         server.serve_forever()

@@ -1,12 +1,19 @@
 import SwiftUI
 
 struct ModelSettingsView: View {
+    @Environment(EngineService.self) private var engine
     @State private var modelStatus: ModelStatus = .unknown
     @State private var isDownloading = false
     @State private var errorMessage: String?
     @State private var serverRunning = false
 
     private let manager = ModelManagerService()
+
+    // True on Macs with ≤ 16 GB unified memory — used to surface a passive
+    // note that the memory-efficient profile is active.
+    private var isLowMemoryMac: Bool {
+        ProcessInfo.processInfo.physicalMemory <= 17_179_869_184
+    }
 
     var body: some View {
         VStack(alignment: .leading, spacing: 16) {
@@ -46,9 +53,7 @@ struct ModelSettingsView: View {
                             .font(.callout)
                             .foregroundStyle(.secondary)
                     } else if isDownloading {
-                        Text("Downloading models …")
-                            .font(.callout)
-                            .foregroundStyle(.secondary)
+                        downloadProgressLabel
                     } else {
                         Text("Server running, models not loaded")
                             .font(.callout)
@@ -70,6 +75,11 @@ struct ModelSettingsView: View {
                     if modelStatus.llmLoaded, !modelStatus.llmModel.isEmpty {
                         Label(modelStatus.llmModel, systemImage: "brain")
                     }
+                    if isLowMemoryMac {
+                        Label("Memory mode", systemImage: "memorychip")
+                            .foregroundStyle(.orange.opacity(0.8))
+                            .help("Your Mac has 16 GB of unified memory. The server runs in memory-efficient mode (float16 precision) to stay within budget. Override: export AURALUX_MEMORY_PROFILE=quality")
+                    }
                 }
                 .font(.caption)
                 .foregroundStyle(.tertiary)
@@ -78,6 +88,40 @@ struct ModelSettingsView: View {
         .padding(12)
         .frame(maxWidth: .infinity, alignment: .leading)
         .background(.quaternary.opacity(0.3), in: RoundedRectangle(cornerRadius: 8))
+    }
+
+    // MARK: - Download Progress
+
+    @ViewBuilder
+    private var downloadProgressLabel: some View {
+        if case .settingUp(let progress) = engine.state {
+            VStack(alignment: .leading, spacing: 4) {
+                Text(progress)
+                    .font(.callout)
+                    .foregroundStyle(.secondary)
+                if let pct = parsePercent(from: progress) {
+                    ProgressView(value: Double(pct), total: 100)
+                        .frame(width: 160)
+                        .controlSize(.small)
+                }
+            }
+        } else {
+            HStack(spacing: 6) {
+                ProgressView().controlSize(.small)
+                Text("Downloading models …")
+                    .font(.callout)
+                    .foregroundStyle(.secondary)
+            }
+        }
+    }
+
+    private func parsePercent(from string: String) -> Int? {
+        // Match the explicit "N%" token so strings like "Step 1 of 10" don't
+        // accidentally parse as a percentage.
+        guard let match = string.range(of: #"\d+%"#, options: .regularExpression) else {
+            return nil
+        }
+        return Int(string[match].dropLast()) // drop the trailing '%'
     }
 
     // MARK: - Model List
@@ -190,9 +234,9 @@ struct ModelSettingsView: View {
     // MARK: - Networking
 
     private func refreshStatus() async {
+        serverRunning = await manager.isServerHealthy()
         let status = await manager.fetchModelStatus()
         modelStatus = status
-        serverRunning = status.device != "unknown"
         errorMessage = status.error
     }
 

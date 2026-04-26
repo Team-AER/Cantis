@@ -22,27 +22,38 @@ struct AudioFFT {
         let halfSize = fftSize / 2
         var realPart = [Float](repeating: 0, count: halfSize)
         var imagPart = [Float](repeating: 0, count: halfSize)
+        var magnitudes = [Float](repeating: 0, count: halfSize)
 
         // Pack interleaved real data into split complex form
-        windowedSamples.withUnsafeBufferPointer { inputPtr in
-            inputPtr.baseAddress!.withMemoryRebound(to: DSPComplex.self, capacity: halfSize) { complexPtr in
-                var splitComplex = DSPSplitComplex(realp: &realPart, imagp: &imagPart)
-                vDSP_ctoz(complexPtr, 2, &splitComplex, 1, vDSP_Length(halfSize))
+        realPart.withUnsafeMutableBufferPointer { realPtr in
+            imagPart.withUnsafeMutableBufferPointer { imagPtr in
+                guard let realBase = realPtr.baseAddress,
+                      let imagBase = imagPtr.baseAddress else { return }
+
+                var splitComplex = DSPSplitComplex(realp: realBase, imagp: imagBase)
+                windowedSamples.withUnsafeBufferPointer { inputPtr in
+                    guard let inputBase = inputPtr.baseAddress else { return }
+                    inputBase.withMemoryRebound(to: DSPComplex.self, capacity: halfSize) { complexPtr in
+                        vDSP_ctoz(complexPtr, 2, &splitComplex, 1, vDSP_Length(halfSize))
+                    }
+                }
+
+                // Perform forward FFT
+                vDSP_fft_zrip(fftSetup, &splitComplex, 1, log2n, FFTDirection(FFT_FORWARD))
+
+                // Compute magnitudes
+                vDSP_zvmags(&splitComplex, 1, &magnitudes, 1, vDSP_Length(halfSize))
             }
         }
-
-        // Perform forward FFT
-        var splitComplex = DSPSplitComplex(realp: &realPart, imagp: &imagPart)
-        vDSP_fft_zrip(fftSetup, &splitComplex, 1, log2n, FFTDirection(FFT_FORWARD))
-
-        // Compute magnitudes
-        var magnitudes = [Float](repeating: 0, count: halfSize)
-        vDSP_zvmags(&splitComplex, 1, &magnitudes, 1, vDSP_Length(halfSize))
 
         // Scale and take square root for amplitude
         var scaleFactor: Float = 1.0 / Float(fftSize)
         vDSP_vsmul(magnitudes, 1, &scaleFactor, &magnitudes, 1, vDSP_Length(halfSize))
         vvsqrtf(&magnitudes, magnitudes, [Int32(halfSize)])
+
+        // Zero DC bin (bin 0) — it represents the mean offset of the signal
+        // and inflates low-frequency bars in the spectrum visualizer.
+        if !magnitudes.isEmpty { magnitudes[0] = 0 }
 
         // Normalize to 0...1 range based on peak
         var peak: Float = 0
