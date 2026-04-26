@@ -9,6 +9,7 @@ struct ContentView: View {
     @Environment(\.modelContext) private var modelContext
     @Environment(\.openWindow) private var openWindow
     @State private var didBootstrap = false
+    @State private var columnVisibility: NavigationSplitViewVisibility = .all
 
     var body: some View {
         ZStack {
@@ -38,7 +39,7 @@ struct ContentView: View {
     }
 
     private var mainContent: some View {
-        NavigationSplitView {
+        NavigationSplitView(columnVisibility: $columnVisibility) {
             SidebarView()
         } content: {
             Group {
@@ -59,6 +60,11 @@ struct ContentView: View {
                 PlayerView(track: selectedTrack)
             } else {
                 ContentUnavailableView("No Track Selected", systemImage: "music.note", description: Text("Generate or select a track to preview it."))
+            }
+        }
+        .onChange(of: sidebarViewModel.selectedSection) { _, section in
+            withAnimation {
+                columnVisibility = section == .settings ? .doubleColumn : .all
             }
         }
         .toolbar {
