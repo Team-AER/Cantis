@@ -6,7 +6,6 @@ import Observation
 final class SettingsViewModel {
     enum QuantizationMode: String, CaseIterable, Identifiable {
         case fp16
-        case int8
 
         var id: String { rawValue }
     }

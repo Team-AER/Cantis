@@ -9,7 +9,6 @@ struct ContentView: View {
     @Environment(\.modelContext) private var modelContext
     @Environment(\.openWindow) private var openWindow
     @State private var didBootstrap = false
-    @State private var columnVisibility: NavigationSplitViewVisibility = .all
 
     var body: some View {
         ZStack {
@@ -38,33 +37,40 @@ struct ContentView: View {
         }
     }
 
-    private var mainContent: some View {
-        NavigationSplitView(columnVisibility: $columnVisibility) {
-            SidebarView()
-        } content: {
-            Group {
-                switch sidebarViewModel.selectedSection ?? .generate {
-                case .generate:
-                    GenerationView()
-                case .history:
-                    HistoryBrowserView()
-                case .audioToAudio:
-                    AudioImportView()
-                case .settings:
-                    SettingsView()
-                }
-            }
-            .navigationTitle(sidebarViewModel.selectedSection?.title ?? "Auralux")
-        } detail: {
-            if let selectedTrack = historyViewModel.selectedTrack ?? generationViewModel.lastTrack {
-                PlayerView(track: selectedTrack)
-            } else {
-                ContentUnavailableView("No Track Selected", systemImage: "music.note", description: Text("Generate or select a track to preview it."))
-            }
+    @ViewBuilder
+    private var playerPanel: some View {
+        if let selectedTrack = historyViewModel.selectedTrack ?? generationViewModel.lastTrack {
+            PlayerView(track: selectedTrack)
+        } else {
+            ContentUnavailableView("No Track Selected", systemImage: "music.note", description: Text("Generate or select a track to preview it."))
         }
-        .onChange(of: sidebarViewModel.selectedSection) { _, section in
-            withAnimation {
-                columnVisibility = section == .settings ? .doubleColumn : .all
+    }
+
+    private var mainContent: some View {
+        NavigationSplitView {
+            SidebarView()
+        } detail: {
+            HStack(spacing: 0) {
+                Group {
+                    switch sidebarViewModel.selectedSection ?? .generate {
+                    case .generate:
+                        GenerationView()
+                    case .history:
+                        HistoryBrowserView()
+                    case .audioToAudio:
+                        AudioImportView()
+                    case .settings:
+                        SettingsView()
+                    }
+                }
+                .navigationTitle(sidebarViewModel.selectedSection?.title ?? "Auralux")
+                .frame(maxWidth: .infinity)
+
+                if sidebarViewModel.selectedSection != .settings {
+                    Divider()
+                    playerPanel
+                        .frame(width: 320)
+                }
             }
         }
         .toolbar {

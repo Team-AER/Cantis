@@ -20,13 +20,8 @@ struct SettingsView: View {
             settingsCard("Performance", systemImage: "gauge.with.dots.needle.50percent") {
                 VStack(spacing: 10) {
                     LabeledContent("Quantization") {
-                        Picker("", selection: Bindable(viewModel).quantizationMode) {
-                            ForEach(SettingsViewModel.QuantizationMode.allCases) { mode in
-                                Text(mode.rawValue.uppercased()).tag(mode)
-                            }
-                        }
-                        .labelsHidden()
-                        .frame(width: 100)
+                        Text("FP16")
+                            .foregroundStyle(.secondary)
                     }
                     Divider()
                     LabeledContent("Low-memory mode") {

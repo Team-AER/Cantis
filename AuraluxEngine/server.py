@@ -252,12 +252,18 @@ def _patch_mps_text_encoder_embed() -> None:
             return _orig_infer_text(self, text_token_idss)
 
         mps_dev = self.device
+        # Capture dtype before device move; CPU kernels may silently upcast
+        # float16 → float32, so we must restore it on the way back.
+        try:
+            target_dtype = next(self.text_encoder.parameters()).dtype
+        except StopIteration:
+            target_dtype = torch.float16
         self.text_encoder.cpu()
         try:
             cpu_ids = text_token_idss.cpu() if hasattr(text_token_idss, "cpu") else text_token_idss
             with torch.inference_mode():
                 result = self.text_encoder(input_ids=cpu_ids, lyric_attention_mask=None).last_hidden_state
-            return result.to(mps_dev)
+            return result.to(dtype=target_dtype, device=mps_dev)
         finally:
             self.text_encoder.to(mps_dev)
 
@@ -266,12 +272,16 @@ def _patch_mps_text_encoder_embed() -> None:
             return _orig_infer_lyric(self, lyric_token_ids)
 
         mps_dev = self.device
+        try:
+            target_dtype = next(self.text_encoder.parameters()).dtype
+        except StopIteration:
+            target_dtype = torch.float16
         self.text_encoder.cpu()
         try:
             cpu_ids = lyric_token_ids.cpu() if hasattr(lyric_token_ids, "cpu") else lyric_token_ids
             with torch.inference_mode():
                 result = self.text_encoder.embed_tokens(cpu_ids)
-            return result.to(mps_dev)
+            return result.to(dtype=target_dtype, device=mps_dev)
         finally:
             self.text_encoder.to(mps_dev)
 
@@ -384,6 +394,38 @@ def _patch_mps_prepare_condition(model_instance) -> None:
 
 
 # ---------------------------------------------------------------------------
+# Monkey-patch: AudioTokenDetokenizer dtype normalisation on MPS
+# ---------------------------------------------------------------------------
+# _prepare_target_latents_and_wavs calls AudioTokenDetokenizer.forward directly
+# (not through _decode_audio_codes_to_latents), so the existing audio-code-decode
+# patch does not cover this path.  MPS CPU-fallback ops silently upcast float16
+# tensors to float32; if that upcasted tensor then hits a float16 Linear weight,
+# PyTorch raises "mat1 and mat2 must have the same dtype, but got Float and Half".
+# The cast is a no-op when dtypes already match (quality / float32 profile).
+
+
+def _patch_mps_audio_token_detokenizer(model) -> None:
+    """Patch AudioTokenDetokenizer.forward to normalise input dtype on MPS."""
+    if model is None or not hasattr(model, "detokenizer"):
+        return
+
+    detokenizer = model.detokenizer
+    detokenizer_cls = type(detokenizer)
+    _orig_forward = detokenizer_cls.forward
+
+    def _dtype_safe_forward(self, x):  # type: ignore[override]
+        weight = getattr(getattr(self, "embed_tokens", None), "weight", None)
+        if weight is not None and x.dtype != weight.dtype:
+            x = x.to(weight.dtype)
+        return _orig_forward(self, x)
+
+    detokenizer_cls.forward = _dtype_safe_forward
+    log.info(
+        "Patched %s.forward for MPS dtype safety", detokenizer_cls.__name__
+    )
+
+
+# ---------------------------------------------------------------------------
 # Paths – resolve the cloned ACE-Step 1.5 repo so we can import `acestep`
 # ---------------------------------------------------------------------------
 
@@ -450,6 +492,7 @@ def _ensure_initialized() -> bool:
             # with trust_remote_code=True, so we must patch after loading.
             if dit.model is not None:
                 _patch_mps_prepare_condition(dit.model)
+                _patch_mps_audio_token_detokenizer(dit.model)
 
             _dit_handler = dit
 
@@ -587,7 +630,7 @@ def _process_stats() -> Dict[str, Any]:
             pass
         try:
             import mlx.core as mx
-            metal_bytes += mx.metal.get_active_memory() + mx.metal.get_cache_memory()
+            metal_bytes += mx.get_active_memory() + mx.get_cache_memory()
         except Exception:
             pass
         stats["totalMemoryMB"] = round((rss_bytes + metal_bytes) / (1024 * 1024), 1)
