@@ -89,6 +89,34 @@ final class ViewModelTests: XCTestCase {
         XCTAssertNil(viewModel.currentJobID)
     }
 
+    func testGenerateWithEmptyPromptLeavesTaskNil() throws {
+        let viewModel = GenerationViewModel(inferenceService: InferenceService())
+        viewModel.prompt = ""
+
+        let config = ModelConfiguration(isStoredInMemoryOnly: true)
+        let container = try ModelContainer(for: GeneratedTrack.self, Preset.self, Tag.self, configurations: config)
+        let engine = EngineService(inferenceService: InferenceService())
+        viewModel.generate(in: container.mainContext, engine: engine)
+
+        // Empty-prompt guard returns before assigning generationTask.
+        // Cancelling immediately should not throw or crash.
+        viewModel.cancel()
+        XCTAssertEqual(viewModel.state, .idle)
+    }
+
+    func testSettingsMaxConcurrentJobsClampSavesOnce() {
+        let suiteName = "test-clamp-\(UUID().uuidString)"
+        let defaults = UserDefaults(suiteName: suiteName)!
+        defer { defaults.removePersistentDomain(forName: suiteName) }
+
+        let vm = SettingsViewModel(defaults: defaults)
+        vm.maxConcurrentJobs = 10  // triggers clamping to 4
+
+        XCTAssertEqual(vm.maxConcurrentJobs, 4)
+        // The saved value should be 4, not 10.
+        XCTAssertEqual(defaults.integer(forKey: "settings.maxConcurrentJobs"), 4)
+    }
+
     // MARK: - GenerationState
 
     func testGenerationStateIsBusy() {
