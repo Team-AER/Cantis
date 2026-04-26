@@ -50,6 +50,23 @@ STARTED_AT = time.time()
 os.environ.setdefault("PYTORCH_ENABLE_MPS_FALLBACK", "1")
 
 # ---------------------------------------------------------------------------
+# Memory profile — applied before ACE-Step imports so env vars are in place
+# when handler.py reads them during model init.
+#
+#   quality  (default ≥24 GB): MLX DiT fp16, PyTorch DiT → CPU float32.
+#   memory   (auto ≤16 GB):    MLX DiT fp16, PyTorch DiT → CPU float16.
+#
+# All generation features remain enabled in both profiles.
+# ---------------------------------------------------------------------------
+_MEMORY_PROFILE = os.environ.get("AURALUX_MEMORY_PROFILE", "quality").lower()
+if _MEMORY_PROFILE == "memory":
+    os.environ.setdefault("ACESTEP_MLX_DTYPE", "float16")
+    os.environ.setdefault("ACESTEP_TORCH_DIT_CPU_FP16", "1")
+else:
+    os.environ.setdefault("ACESTEP_MLX_DTYPE", "float32")
+    os.environ.setdefault("ACESTEP_TORCH_DIT_CPU_FP16", "0")
+
+# ---------------------------------------------------------------------------
 # Monkey-patch: masked_fill on MPS
 # ---------------------------------------------------------------------------
 # PyTorch's masked_fill is technically "supported" on MPS so the fallback env
@@ -321,6 +338,15 @@ def _patch_mps_prepare_condition(model_instance) -> None:
             if mod is not None:
                 modules.append(mod)
 
+        # Capture each module's current device so we restore correctly when
+        # the PyTorch DiT has already been offloaded to CPU by _offload_torch_dit_to_cpu.
+        orig_devices = []
+        for m in modules:
+            try:
+                orig_devices.append(next(m.parameters()).device)
+            except StopIteration:
+                orig_devices.append(torch.device("cpu"))
+
         for m in modules:
             m.cpu()
 
@@ -345,8 +371,10 @@ def _patch_mps_prepare_condition(model_instance) -> None:
                 else result
             )
         finally:
-            for m in modules:
-                m.to(mps_device)
+            # Restore each module to its original device (CPU→CPU is a no-op;
+            # MPS→MPS restores the old behaviour when MLX is not active).
+            for m, orig_dev in zip(modules, orig_devices):
+                m.to(orig_dev)
 
     model_cls.prepare_condition = _cpu_safe_prepare_condition
     log.info(
@@ -371,6 +399,7 @@ if ACE_STEP_DIR.is_dir():
 # ---------------------------------------------------------------------------
 
 _init_lock = threading.Lock()
+_inference_lock = threading.Lock()  # serialises generate_music() calls; one job at a time
 _dit_handler: Optional[Any] = None
 _llm_handler: Optional[Any] = None
 _init_error: Optional[str] = None
@@ -540,11 +569,53 @@ def _process_stats() -> Dict[str, Any]:
         import psutil
         proc = psutil.Process(pid)
         stats["cpuPercent"] = proc.cpu_percent(interval=None)
-        stats["memoryRSSMB"] = round(proc.memory_info().rss / (1024 * 1024), 1)
+        rss_bytes = proc.memory_info().rss
+        stats["memoryRSSMB"] = round(rss_bytes / (1024 * 1024), 1)
+
+        # psutil RSS on macOS uses task_basic_info which excludes Metal/IOSurface
+        # buffer mappings (where model weights live).  Activity Monitor uses
+        # phys_footprint which includes them — hence the large gap.
+        # We reconstruct the full footprint by adding:
+        #   • PyTorch MPS driver allocation  (PyTorch's Metal heap)
+        #   • MLX active + cached memory     (MLX's separate Metal heap)
+        metal_bytes = 0
+        try:
+            import torch
+            if torch.backends.mps.is_available():
+                metal_bytes += torch.mps.driver_allocated_memory()
+        except Exception:
+            pass
+        try:
+            import mlx.core as mx
+            metal_bytes += mx.metal.get_active_memory() + mx.metal.get_cache_memory()
+        except Exception:
+            pass
+        stats["totalMemoryMB"] = round((rss_bytes + metal_bytes) / (1024 * 1024), 1)
     except Exception as exc:
         stats["statsError"] = str(exc)
 
     return stats
+
+
+def _memory_diagnostics() -> Dict[str, Any]:
+    """Return memory-related diagnostics for the /health endpoint."""
+    diag: Dict[str, Any] = {
+        "profile": os.environ.get("AURALUX_MEMORY_PROFILE", "quality"),
+        "mlxDtype": os.environ.get("ACESTEP_MLX_DTYPE", "float32"),
+        "torchDitOnCpu": getattr(_dit_handler, "_torch_dit_cpu", False),
+        "mlxDitLoaded": getattr(_dit_handler, "use_mlx_dit", False),
+        "mlxVaeLoaded": getattr(_dit_handler, "use_mlx_vae", False),
+        "inferenceActive": _inference_lock.locked(),
+    }
+    try:
+        import torch
+        if torch.backends.mps.is_available():
+            diag["mpsCacheAllocatedMB"] = round(
+                torch.mps.current_allocated_memory() / 1048576, 1
+            )
+    except Exception:
+        pass
+    return diag
 
 
 # ---------------------------------------------------------------------------
@@ -681,7 +752,35 @@ def _run_real_inference(
     if tags:
         caption = ", ".join(tags) + ". " + caption
 
-    JOBS.update(job_id, progress=0.10, message="Preparing generation …")
+    # Acquire the inference lock before touching the model.  A second request
+    # waits here rather than loading a second copy into Metal.
+    JOBS.update(job_id, progress=0.10, message="Waiting for model (serialised) …")
+    with _inference_lock:
+        _run_real_inference_locked(
+            job_id=job_id,
+            caption=caption,
+            lyrics=lyrics,
+            duration=duration,
+            variance=variance,
+            seed=seed,
+            output_path=output_path,
+        )
+
+
+def _run_real_inference_locked(
+    *,
+    job_id: str,
+    caption: str,
+    lyrics: str,
+    duration: float,
+    variance: float,
+    seed: Optional[int],
+    output_path: Path,
+) -> None:
+    """Inner body of _run_real_inference, called while _inference_lock is held."""
+    from acestep.inference import GenerationParams, GenerationConfig, generate_music
+
+    JOBS.update(job_id, progress=0.12, message="Preparing generation …")
 
     use_random = seed is None or seed < 0
     actual_seed = seed if not use_random else -1
@@ -726,6 +825,13 @@ def _run_real_inference(
         except Exception as exc:
             inference_result["error"] = exc
         finally:
+            # Release Metal/MLX caches after each generation to reduce
+            # fragmentation and free transient activation memory.
+            if _dit_handler is not None and hasattr(_dit_handler, "_post_generation_cleanup"):
+                try:
+                    _dit_handler._post_generation_cleanup()
+                except Exception:
+                    pass
             inference_done.set()
 
     worker = threading.Thread(target=_do_inference, daemon=True)
@@ -872,6 +978,7 @@ class Handler(BaseHTTPRequestHandler):
                 "ditModel": os.environ.get("ACESTEP_CONFIG_PATH", "acestep-v15-turbo"),
                 "llmModel": os.environ.get("ACESTEP_LM_MODEL_PATH", "acestep-5Hz-lm-0.6B"),
                 "stats": _process_stats(),
+                "memory": _memory_diagnostics(),
             })
             return
 

@@ -42,6 +42,8 @@ struct EngineRuntimeStats: Codable, Equatable, Sendable {
     var uptimeSeconds: Double?
     var cpuPercent: Double?
     var memoryRSSMB: Double?
+    /// RSS + Metal (MPS driver + MLX) — matches Activity Monitor's phys_footprint.
+    var totalMemoryMB: Double?
     var activeThreads: Int?
     var jobCounts: [String: Int]?
     var statsError: String?
@@ -51,6 +53,7 @@ struct EngineRuntimeStats: Codable, Equatable, Sendable {
         uptimeSeconds: nil,
         cpuPercent: nil,
         memoryRSSMB: nil,
+        totalMemoryMB: nil,
         activeThreads: nil,
         jobCounts: nil,
         statsError: nil

@@ -9,6 +9,12 @@ struct ModelSettingsView: View {
 
     private let manager = ModelManagerService()
 
+    // True on Macs with ≤ 16 GB unified memory — used to surface a passive
+    // note that the memory-efficient profile is active.
+    private var isLowMemoryMac: Bool {
+        ProcessInfo.processInfo.physicalMemory <= 17_179_869_184
+    }
+
     var body: some View {
         VStack(alignment: .leading, spacing: 16) {
             Text("Models")
@@ -68,6 +74,11 @@ struct ModelSettingsView: View {
                     }
                     if modelStatus.llmLoaded, !modelStatus.llmModel.isEmpty {
                         Label(modelStatus.llmModel, systemImage: "brain")
+                    }
+                    if isLowMemoryMac {
+                        Label("Memory mode", systemImage: "memorychip")
+                            .foregroundStyle(.orange.opacity(0.8))
+                            .help("Your Mac has 16 GB of unified memory. The server runs in memory-efficient mode (float16 precision) to stay within budget. Override: export AURALUX_MEMORY_PROFILE=quality")
                     }
                 }
                 .font(.caption)

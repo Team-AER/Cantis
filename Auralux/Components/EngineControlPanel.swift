@@ -90,7 +90,9 @@ struct EngineControlPanel: View {
             statRow("PID", value: engine.runtimeStats.pid.map(String.init) ?? "n/a")
             statRow("Uptime", value: formattedUptime)
             statRow("CPU", value: engine.runtimeStats.cpuPercent.map { String(format: "%.1f%%", $0) } ?? "n/a")
-            statRow("Memory", value: engine.runtimeStats.memoryRSSMB.map { String(format: "%.1f MB", $0) } ?? "n/a")
+            statRow("Memory", value: engine.runtimeStats.totalMemoryMB.map { String(format: "%.1f MB", $0) }
+                ?? engine.runtimeStats.memoryRSSMB.map { String(format: "%.1f MB (RSS)", $0) }
+                ?? "n/a")
             statRow("Threads", value: engine.runtimeStats.activeThreads.map(String.init) ?? "n/a")
             statRow("Jobs", value: formattedJobs)
             statRow("Health", value: formattedHealth)
