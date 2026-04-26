@@ -73,7 +73,8 @@ final class ViewModelTests: XCTestCase {
 
         let config = ModelConfiguration(isStoredInMemoryOnly: true)
         let container = try ModelContainer(for: GeneratedTrack.self, Preset.self, Tag.self, configurations: config)
-        viewModel.generate(in: container.mainContext)
+        let engine = EngineService(inferenceService: InferenceService())
+        viewModel.generate(in: container.mainContext, engine: engine)
 
         XCTAssertEqual(viewModel.state, .failed("Prompt is required."))
     }

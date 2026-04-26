@@ -22,7 +22,6 @@ import argparse
 import json
 import logging
 import os
-import subprocess
 import sys
 import threading
 import time
@@ -34,6 +33,8 @@ from http import HTTPStatus
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from typing import Any, Dict, List, Optional
+
+MAX_REQUEST_BYTES = 1_000_000  # 1 MB cap on incoming request bodies
 
 logging.basicConfig(
     level=logging.INFO,
@@ -536,15 +537,10 @@ def _process_stats() -> Dict[str, Any]:
     }
 
     try:
-        output = subprocess.check_output(
-            ["/bin/ps", "-o", "%cpu=", "-o", "rss=", "-p", str(pid)],
-            text=True,
-            timeout=1,
-        )
-        values = output.strip().split()
-        if len(values) >= 2:
-            stats["cpuPercent"] = float(values[0])
-            stats["memoryRSSMB"] = round(float(values[1]) / 1024, 1)
+        import psutil
+        proc = psutil.Process(pid)
+        stats["cpuPercent"] = proc.cpu_percent(interval=None)
+        stats["memoryRSSMB"] = round(proc.memory_info().rss / (1024 * 1024), 1)
     except Exception as exc:
         stats["statsError"] = str(exc)
 
@@ -653,12 +649,11 @@ def _run_job(
             audio_path=str(output_path),
         )
     except Exception as exc:
-        log.error("Generation failed for job %s: %s", job_id, exc)
-        traceback.print_exc()
+        log.error("Generation failed for job %s: %s\n%s", job_id, exc, traceback.format_exc())
         JOBS.update(
             job_id,
             status="failed",
-            message=f"Generation error: {exc}",
+            message=f"Generation failed: {type(exc).__name__}: {exc}",
         )
 
 
@@ -747,7 +742,9 @@ def _run_real_inference(
     while not inference_done.wait(timeout=tick):
         job = JOBS.get(job_id)
         if job and job.cancelled:
-            log.info("Job %s cancelled during inference", job_id)
+            log.info("Job %s cancelled during inference — waiting for inference thread", job_id)
+            inference_done.wait()  # wait for the thread to finish before returning
+            JOBS.update(job_id, status="cancelled", progress=0.0, message="Job cancelled")
             return
 
         elapsed += tick
@@ -759,6 +756,12 @@ def _run_real_inference(
             progress=round(current, 3),
             message=f"Generating audio … {pct}%",
         )
+
+    # Check cancellation one final time — may have been set while inference was finishing.
+    job = JOBS.get(job_id)
+    if job and job.cancelled:
+        JOBS.update(job_id, status="cancelled", progress=0.0, message="Job cancelled")
+        return
 
     if "error" in inference_result:
         raise inference_result["error"]
@@ -821,11 +824,26 @@ def _run_stub_inference(
 class Handler(BaseHTTPRequestHandler):
     server_version = "AuraluxServer/1.5"
 
-    def _read_json(self) -> Dict[str, object]:
+    def _read_json(self) -> Optional[Dict[str, object]]:
+        """Read and parse the request body as JSON.
+
+        Returns the parsed dict, or None if the response has already been
+        sent (caller should return immediately in that case).
+        """
         length = int(self.headers.get("Content-Length", "0"))
         if length <= 0:
             return {}
-        return json.loads(self.rfile.read(length).decode("utf-8"))
+        if length > MAX_REQUEST_BYTES:
+            self._send_json(
+                {"error": f"request body too large (max {MAX_REQUEST_BYTES} bytes)"},
+                HTTPStatus.REQUEST_ENTITY_TOO_LARGE,
+            )
+            return None
+        try:
+            return json.loads(self.rfile.read(length).decode("utf-8"))
+        except (json.JSONDecodeError, UnicodeDecodeError) as exc:
+            self._send_json({"error": f"invalid JSON: {exc}"}, HTTPStatus.BAD_REQUEST)
+            return None
 
     def _send_json(self, payload: Dict[str, object], status: HTTPStatus = HTTPStatus.OK) -> None:
         body = json.dumps(payload).encode("utf-8")
@@ -874,11 +892,29 @@ class Handler(BaseHTTPRequestHandler):
     def do_POST(self) -> None:
         if self.path == "/generate":
             payload = self._read_json()
-            prompt = str(payload.get("prompt", ""))
+            if payload is None:
+                return
+
+            prompt = str(payload.get("prompt", "")).strip()
             lyrics = str(payload.get("lyrics", ""))
             tags = list(payload.get("tags", []))
-            duration = float(payload.get("duration", 30))
-            variance = float(payload.get("variance", 0.5))
+
+            try:
+                duration = float(payload.get("duration_seconds", payload.get("duration", 30)))
+                if not (0 < duration <= 600):
+                    raise ValueError(f"duration must be between 0 and 600, got {duration}")
+            except (TypeError, ValueError) as exc:
+                self._send_json({"error": str(exc)}, HTTPStatus.BAD_REQUEST)
+                return
+
+            try:
+                variance = float(payload.get("variance", 0.5))
+                if not (0 <= variance <= 2):
+                    raise ValueError(f"variance must be between 0 and 2, got {variance}")
+            except (TypeError, ValueError) as exc:
+                self._send_json({"error": str(exc)}, HTTPStatus.BAD_REQUEST)
+                return
+
             seed_raw = payload.get("seed")
             seed = int(seed_raw) if seed_raw is not None else None
 
@@ -914,7 +950,13 @@ class Handler(BaseHTTPRequestHandler):
         self._send_json({"error": "not found"}, HTTPStatus.NOT_FOUND)
 
     def log_message(self, format: str, *args: object) -> None:
-        log.debug(format, *args)
+        msg = format % args
+        # Log non-2xx responses at INFO so HTTP errors are visible without
+        # changing the global log level.
+        if args and isinstance(args[1], str) and not args[1].startswith("2"):
+            log.info(msg)
+        else:
+            log.debug(msg)
 
 
 # ---------------------------------------------------------------------------
@@ -931,7 +973,11 @@ def main() -> None:
         log.info("Preloading model …")
         _ensure_initialized()
 
-    server = ThreadingHTTPServer(("127.0.0.1", args.port), Handler)
+    class _Server(ThreadingHTTPServer):
+        allow_reuse_address = True
+        daemon_threads = True  # request threads die when the main thread exits
+
+    server = _Server(("127.0.0.1", args.port), Handler)
     log.info("Auralux API server listening on http://127.0.0.1:%d", args.port)
     try:
         server.serve_forever()

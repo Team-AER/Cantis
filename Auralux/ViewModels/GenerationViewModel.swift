@@ -85,6 +85,7 @@ final class GenerationViewModel {
         log.info("Starting generation: \"\(prompt.prefix(60))\" duration=\(duration)s", category: .generation)
 
         generationTask = Task {
+            defer { generationTask = nil }
             do {
                 progressMessage = "Starting inference engine..."
                 try await engine.prepareForGeneration()

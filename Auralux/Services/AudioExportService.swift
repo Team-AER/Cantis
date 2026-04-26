@@ -9,7 +9,12 @@ enum AudioExportFormat: String, CaseIterable, Identifiable, Codable {
     case alac
 
     var id: String { rawValue }
-    var fileExtension: String { rawValue }
+    var fileExtension: String {
+        switch self {
+        case .aac, .alac: return "m4a"
+        default: return rawValue
+        }
+    }
 
     var audioFormatID: AudioFormatID {
         switch self {
@@ -59,7 +64,7 @@ final class AudioExportService: Sendable {
             throw AudioExportError.invalidSource
         }
 
-        let name = "\(configuration.title.replacingOccurrences(of: " ", with: "_"))_\(UUID().uuidString.prefix(8)).\(configuration.format.fileExtension)"
+        let name = "\(sanitizedFilename(configuration.title))_\(UUID().uuidString.prefix(8)).\(configuration.format.fileExtension)"
         let destination = destinationDirectory.appendingPathComponent(name)
 
         switch configuration.format {
@@ -200,12 +205,7 @@ final class AudioExportService: Sendable {
     private func avFileType(for format: AudioExportFormat) throws -> AVFileType {
         switch format {
         case .wav: return .wav
-        case .flac:
-            if #available(macOS 14.0, *) {
-                return AVFileType(rawValue: "public.flac")
-            } else {
-                throw AudioExportError.unsupported
-            }
+        case .flac: return AVFileType(rawValue: "public.flac")
         case .mp3: return .mp3
         case .aac: return .m4a
         case .alac: return .m4a
@@ -221,5 +221,16 @@ final class AudioExportService: Sendable {
         if FileManager.default.fileExists(atPath: url.path) {
             try? FileManager.default.removeItem(at: url)
         }
+    }
+
+    private func sanitizedFilename(_ title: String) -> String {
+        let illegal = CharacterSet(charactersIn: "/\\:*?\"<>|")
+        let sanitized = title
+            .components(separatedBy: illegal)
+            .joined(separator: "_")
+            .replacingOccurrences(of: " ", with: "_")
+            .trimmingCharacters(in: CharacterSet(charactersIn: "_"))
+        let limited = String(sanitized.prefix(80))
+        return limited.isEmpty ? "track" : limited
     }
 }

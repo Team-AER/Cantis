@@ -35,7 +35,6 @@ final class HistoryService {
 
     func setFavorite(_ track: GeneratedTrack, isFavorite: Bool) throws {
         track.isFavorite = isFavorite
-        track.createdAt = track.createdAt
         try context.save()
     }
 }

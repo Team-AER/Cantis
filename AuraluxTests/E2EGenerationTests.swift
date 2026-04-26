@@ -14,6 +14,7 @@ final class E2EGenerationTests: XCTestCase {
 
     private var session: URLSession!
     private var inferenceService: InferenceService!
+    private var engine: EngineService!
     private var viewModel: GenerationViewModel!
     private var container: ModelContainer!
     private var context: ModelContext!
@@ -42,6 +43,7 @@ final class E2EGenerationTests: XCTestCase {
             session: session
         )
 
+        engine = EngineService(inferenceService: inferenceService)
         viewModel = GenerationViewModel(inferenceService: inferenceService)
 
         let config = ModelConfiguration(isStoredInMemoryOnly: true)
@@ -56,6 +58,7 @@ final class E2EGenerationTests: XCTestCase {
         MockURLProtocol.reset()
         session = nil
         inferenceService = nil
+        engine = nil
         viewModel = nil
         container = nil
         context = nil
@@ -131,7 +134,7 @@ final class E2EGenerationTests: XCTestCase {
 
         XCTAssertEqual(viewModel.state, .idle)
 
-        viewModel.generate(in: context)
+        viewModel.generate(in: context, engine: engine)
 
         // State should transition to preparing immediately
         XCTAssertTrue(viewModel.state == .preparing || viewModel.state == .generating)
@@ -156,7 +159,7 @@ final class E2EGenerationTests: XCTestCase {
         registerHappyPath()
         configureValidPrompt()
 
-        viewModel.generate(in: context)
+        viewModel.generate(in: context, engine: engine)
         try await waitForCompletion()
 
         // After completion, progress should be 1.0
@@ -175,7 +178,7 @@ final class E2EGenerationTests: XCTestCase {
     /// Empty prompt should fail immediately without making any HTTP calls.
     func testEmptyPromptFailsImmediately() async throws {
         viewModel.prompt = "   "
-        viewModel.generate(in: context)
+        viewModel.generate(in: context, engine: engine)
 
         XCTAssertEqual(viewModel.state, .failed("Prompt is required."))
 
@@ -192,7 +195,7 @@ final class E2EGenerationTests: XCTestCase {
         )
 
         configureValidPrompt()
-        viewModel.generate(in: context)
+        viewModel.generate(in: context, engine: engine)
         try await waitForCompletion()
 
         if case .failed(let message) = viewModel.state {
@@ -227,7 +230,7 @@ final class E2EGenerationTests: XCTestCase {
         )
 
         configureValidPrompt()
-        viewModel.generate(in: context)
+        viewModel.generate(in: context, engine: engine)
         try await waitForCompletion()
 
         if case .failed(let message) = viewModel.state {
@@ -261,7 +264,7 @@ final class E2EGenerationTests: XCTestCase {
         )
 
         configureValidPrompt()
-        viewModel.generate(in: context)
+        viewModel.generate(in: context, engine: engine)
         try await waitForCompletion()
 
         if case .failed(let message) = viewModel.state {
@@ -301,7 +304,7 @@ final class E2EGenerationTests: XCTestCase {
         )
 
         configureValidPrompt()
-        viewModel.generate(in: context)
+        viewModel.generate(in: context, engine: engine)
 
         // Let the generation start and reach "generating" state
         let deadline = Date().addingTimeInterval(5)
@@ -328,7 +331,7 @@ final class E2EGenerationTests: XCTestCase {
         registerHappyPath(jobID: "meta-job-1", audioPath: audioPath)
         configureValidPrompt()
 
-        viewModel.generate(in: context)
+        viewModel.generate(in: context, engine: engine)
         try await waitForCompletion()
 
         let descriptor = FetchDescriptor<GeneratedTrack>()
@@ -364,7 +367,7 @@ final class E2EGenerationTests: XCTestCase {
         registerHappyPath(jobID: "player-job-1", audioPath: audioPath)
         configureValidPrompt()
 
-        viewModel.generate(in: context)
+        viewModel.generate(in: context, engine: engine)
         try await waitForCompletion()
 
         let track = try XCTUnwrap(viewModel.lastTrack)

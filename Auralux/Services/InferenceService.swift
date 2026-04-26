@@ -64,6 +64,7 @@ enum InferenceError: Error, LocalizedError {
     case invalidResponse
     case requestFailed(String)
     case jobNotFound(String)
+    case decodingFailed(String)
 
     var errorDescription: String? {
         switch self {
@@ -75,6 +76,8 @@ enum InferenceError: Error, LocalizedError {
             return "Request failed: \(detail)"
         case .jobNotFound(let jobID):
             return "Job \(jobID) lost — the inference server crashed and restarted. Please try again."
+        case .decodingFailed(let detail):
+            return "Unexpected response from server: \(detail)"
         }
     }
 }
@@ -135,7 +138,12 @@ actor InferenceService {
             let (data, response) = try await session.data(for: request)
             guard let http = response as? HTTPURLResponse,
                   (200...299).contains(http.statusCode) else { return nil }
-            return try JSONDecoder().decode(HealthResponse.self, from: data)
+            do {
+                return try JSONDecoder().decode(HealthResponse.self, from: data)
+            } catch {
+                logDebug("fetchHealth decode error — raw: \(String(data: data, encoding: .utf8) ?? "<binary>")")
+                return nil
+            }
         } catch {
             return nil
         }
@@ -161,9 +169,14 @@ actor InferenceService {
             throw InferenceError.requestFailed("generate failed: \(http.statusCode)")
         }
 
-        let decoded = try JSONDecoder().decode(GenerationResponse.self, from: data)
-        logInfo("Job accepted: \(decoded.jobID)")
-        return decoded
+        do {
+            let decoded = try JSONDecoder().decode(GenerationResponse.self, from: data)
+            logInfo("Job accepted: \(decoded.jobID)")
+            return decoded
+        } catch {
+            logDebug("generate decode error — raw: \(String(data: data, encoding: .utf8) ?? "<binary>")")
+            throw InferenceError.decodingFailed(error.localizedDescription)
+        }
     }
 
     func poll(jobID: String) async throws -> GenerationStatusResponse {
@@ -177,7 +190,12 @@ actor InferenceService {
         guard (200...299).contains(http.statusCode) else {
             throw InferenceError.requestFailed("poll failed: \(http.statusCode)")
         }
-        return try JSONDecoder().decode(GenerationStatusResponse.self, from: data)
+        do {
+            return try JSONDecoder().decode(GenerationStatusResponse.self, from: data)
+        } catch {
+            logDebug("poll decode error — raw: \(String(data: data, encoding: .utf8) ?? "<binary>")")
+            throw InferenceError.decodingFailed(error.localizedDescription)
+        }
     }
 
     func cancel(jobID: String) async throws {

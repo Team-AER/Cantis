@@ -1,3 +1,4 @@
+import Darwin
 import Foundation
 import Observation
 
@@ -69,6 +70,7 @@ final class EngineService {
     private var healthTask: Task<Void, Never>?
     private var setupProcess: Process?
     private var didRequestManualStop = false
+    private var restartAttempts = 0
 
     private let inferenceService: InferenceService
     private let log = AppLogger.shared
@@ -385,12 +387,26 @@ final class EngineService {
 
     func stopServer(allowExternalStop: Bool = true) {
         didRequestManualStop = true
+        restartAttempts = 0
         healthTask?.cancel()
         healthTask = nil
 
         if let proc = serverProcess, proc.isRunning {
             proc.terminate()
-            appendLog("Server stopped.")
+            appendLog("Server stopping…")
+            // Escalate to SIGKILL after 5 s if the process hasn't exited.
+            // Done off the main thread so we don't block the UI.
+            let pid = proc.processIdentifier
+            Task.detached {
+                var waited = 0.0
+                while proc.isRunning && waited < 5.0 {
+                    try? await Task.sleep(for: .milliseconds(100))
+                    waited += 0.1
+                }
+                if proc.isRunning {
+                    kill(pid, SIGKILL)
+                }
+            }
         } else if allowExternalStop, let pid = runtimeStats.pid, pid > 1 {
             let killProcess = Process()
             killProcess.executableURL = URL(fileURLWithPath: "/bin/kill")
@@ -438,6 +454,7 @@ final class EngineService {
         if let health = await inferenceService.fetchHealth() {
             lastHealthCheckAt = .now
             lastHealthLatency = Date().timeIntervalSince(startedAt)
+            restartAttempts = 0
             updateModelStatus(from: health)
             state = health.modelLoaded ? .ready : .running
         } else {
@@ -447,7 +464,16 @@ final class EngineService {
                     state = .stopped
                     return
                 }
-                appendLog("Server process died. Attempting restart...")
+                let maxRestarts = 3
+                guard restartAttempts < maxRestarts else {
+                    log.error("Server crashed \(maxRestarts) times without recovering — giving up", category: .engine)
+                    state = .error("Server crashed \(maxRestarts) times. Check logs and restart manually.")
+                    return
+                }
+                restartAttempts += 1
+                let backoffSeconds = pow(4.0, Double(restartAttempts - 1)) // 1s, 4s, 16s
+                appendLog("Server process died (attempt \(restartAttempts)/\(maxRestarts)). Restarting in \(Int(backoffSeconds))s…")
+                try? await Task.sleep(for: .seconds(backoffSeconds))
                 await startServerInternal()
             } else if serverProcess != nil {
                 appendLog("Inference server stopped responding.")
@@ -508,18 +534,28 @@ final class EngineService {
         do {
             try await inferenceService.triggerModelDownload()
             appendLog("Model download triggered.")
-            // Poll for completion
-            for _ in 0..<600 {
+            state = .settingUp(progress: "Downloading models…")
+            // Poll up to 30 min; surface progress via state so the UI can show it.
+            let maxAttempts = 1800
+            for attempt in 0..<maxAttempts {
                 try? await Task.sleep(for: .seconds(1))
-                if let health = await inferenceService.fetchHealth(), health.modelLoaded {
-                    updateModelStatus(from: health)
-                    state = .ready
-                    appendLog("Models loaded successfully.")
-                    return
+                if let health = await inferenceService.fetchHealth() {
+                    if health.modelLoaded {
+                        updateModelStatus(from: health)
+                        state = .ready
+                        appendLog("Models loaded successfully.")
+                        return
+                    }
+                    // Rough progress estimate: ramp 0→80% over 15 min, hold at 80% after that.
+                    let pct = min(80, Int(Double(attempt) / 900.0 * 80.0))
+                    state = .settingUp(progress: "Downloading models — \(pct)%")
                 }
             }
+            appendLog("Model download timed out.")
+            state = .error("Model download did not complete within 30 minutes.")
         } catch {
             appendLog("Model download failed: \(error.localizedDescription)")
+            state = .error("Model download failed: \(error.localizedDescription)")
         }
     }
 
