@@ -9,7 +9,6 @@
 ## Validation
 
 - [ ] `swift test`
-- [ ] `python3 -m py_compile AuraluxEngine/server.py`
 
 ## Checklist
 

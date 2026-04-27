@@ -1,9 +1,9 @@
 import SwiftUI
 
-/// A compact status badge showing the current state of the inference engine.
-/// Designed for use in the toolbar or sidebar.
+/// A compact status badge showing the current state of the MLX inference models.
+/// Designed for use in the toolbar.
 struct EngineStatusView: View {
-    @Environment(EngineService.self) private var engine
+    @Environment(NativeInferenceEngine.self) private var engine
 
     @State private var showPopover = false
 
@@ -26,133 +26,117 @@ struct EngineStatusView: View {
         }
         .buttonStyle(.glass)
         .fixedSize()
-        .accessibilityLabel("Engine status: \(statusLabel)")
+        .accessibilityLabel("Model status: \(statusLabel)")
         .popover(isPresented: $showPopover) {
-            enginePopover
+            modelPopover
                 .padding(16)
-                .frame(width: 320)
+                .frame(width: 280)
         }
-        .help("Engine status — click for details")
+        .help("Model status — click for details")
     }
 
     private var statusColor: Color {
-        switch engine.state {
+        switch engine.modelState {
         case .ready:
-            return .green
-        case .running:
-            return .yellow
-        case .starting, .settingUp:
+            return engine.isGenerating ? .yellow : .green
+        case .loading:
             return .orange
+        case .downloading:
+            return .blue
+        case .notDownloaded:
+            return .gray
         case .error:
             return .red
-        case .notSetup, .unknown, .stopped:
-            return .gray
         }
     }
 
     private var statusLabel: String {
-        switch engine.state {
+        switch engine.modelState {
         case .ready:
-            return "Ready"
-        case .running:
-            return "Running"
-        case .starting:
-            return "Starting"
-        case .settingUp:
-            return "Setting up"
+            return engine.isGenerating ? "Generating" : "Ready"
+        case .loading:
+            return "Loading"
+        case .downloading(let p):
+            return "Downloading \(Int(p * 100))%"
+        case .notDownloaded:
+            return "Not downloaded"
         case .error:
             return "Error"
-        case .notSetup:
-            return "Not configured"
-        case .unknown:
-            return "Checking"
-        case .stopped:
-            return "Idle"
         }
     }
 
     @ViewBuilder
-    private var enginePopover: some View {
+    private var modelPopover: some View {
         VStack(alignment: .leading, spacing: 12) {
-            EngineControlPanel(isCompact: true)
+            HStack(spacing: 8) {
+                Circle()
+                    .fill(statusColor)
+                    .frame(width: 9, height: 9)
 
-            switch engine.state {
+                VStack(alignment: .leading, spacing: 2) {
+                    Text("MLX Inference")
+                        .font(.subheadline.weight(.semibold))
+                    Text(statusLabel)
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                }
+            }
+
+            switch engine.modelState {
             case .ready:
                 Divider()
-                readyInfo
-            case .running:
-                Label("Server running, models loading...", systemImage: "bolt.circle")
+                Label("Models loaded and ready", systemImage: "checkmark.circle.fill")
                     .font(.callout)
-            case .starting:
+                    .foregroundStyle(.green)
+                if engine.isGenerating {
+                    Label("Generation in progress...", systemImage: "waveform")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                }
+
+            case .loading:
                 HStack(spacing: 8) {
                     ProgressView().controlSize(.small)
-                    Text("Starting server...")
+                    Text("Loading model weights...")
                         .font(.callout)
                 }
-            case .settingUp(let progress):
-                HStack(spacing: 8) {
-                    ProgressView().controlSize(.small)
-                    Text(progress)
+
+            case .downloading(let progress):
+                VStack(alignment: .leading, spacing: 6) {
+                    Label("Downloading model weights…", systemImage: "arrow.down.circle")
                         .font(.callout)
-                        .lineLimit(2)
+                        .foregroundStyle(.blue)
+                    ProgressView(value: progress)
+                        .progressViewStyle(.linear)
+                    Text("\(Int(progress * 100))% — ~5 GB total")
+                        .font(.caption2)
+                        .foregroundStyle(.secondary)
                 }
-            case .error:
-                Button("Retry") {
-                    Task { await engine.startServer() }
-                }
-                .buttonStyle(.bordered)
-                .controlSize(.small)
 
-            case .notSetup:
-                Label("Engine not configured. Open Settings to set up.", systemImage: "gearshape")
-                    .font(.callout)
-                    .foregroundStyle(.secondary)
-
-            case .unknown:
-                HStack(spacing: 8) {
-                    ProgressView().controlSize(.small)
-                    Text("Checking engine status...")
+            case .notDownloaded:
+                VStack(alignment: .leading, spacing: 6) {
+                    Label("Weights not found", systemImage: "exclamationmark.triangle")
                         .font(.callout)
-                }
-            case .stopped:
-                Label("Server idle. It will start on demand when you generate audio.", systemImage: "pause.circle")
-                    .font(.callout)
-                    .foregroundStyle(.secondary)
-            }
-        }
-    }
-
-    @ViewBuilder
-    private var readyInfo: some View {
-        VStack(alignment: .leading, spacing: 8) {
-            Label("Engine ready", systemImage: "checkmark.circle.fill")
-                .font(.callout)
-                .foregroundStyle(.green)
-
-            if engine.modelStatus.ditLoaded {
-                HStack(spacing: 12) {
-                    VStack(alignment: .leading, spacing: 2) {
-                        Text("Device").font(.caption2).foregroundStyle(.tertiary)
-                        Text(engine.modelStatus.device).font(.caption)
-                    }
-                    VStack(alignment: .leading, spacing: 2) {
-                        Text("Engine").font(.caption2).foregroundStyle(.tertiary)
-                        Text(engine.modelStatus.engine).font(.caption)
-                    }
+                        .foregroundStyle(.orange)
+                    Text("Open Auralux and let it download model weights automatically.")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
                 }
 
-                if !engine.modelStatus.ditModel.isEmpty {
-                    VStack(alignment: .leading, spacing: 2) {
-                        Text("DiT Model").font(.caption2).foregroundStyle(.tertiary)
-                        Text(engine.modelStatus.ditModel).font(.caption)
+            case .error(let message):
+                VStack(alignment: .leading, spacing: 6) {
+                    Label("Load error", systemImage: "xmark.circle.fill")
+                        .font(.callout)
+                        .foregroundStyle(.red)
+                    Text(message)
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                        .lineLimit(3)
+                    Button("Retry") {
+                        Task { await engine.loadModels() }
                     }
-                }
-
-                if engine.modelStatus.llmLoaded, !engine.modelStatus.llmModel.isEmpty {
-                    VStack(alignment: .leading, spacing: 2) {
-                        Text("LM Model").font(.caption2).foregroundStyle(.tertiary)
-                        Text(engine.modelStatus.llmModel).font(.caption)
-                    }
+                    .buttonStyle(.bordered)
+                    .controlSize(.small)
                 }
             }
         }

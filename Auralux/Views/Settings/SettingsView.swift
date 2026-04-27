@@ -66,10 +66,6 @@ struct SettingsView: View {
 
     private var rightColumn: some View {
         VStack(alignment: .leading, spacing: 16) {
-            settingsCard("Engine", systemImage: "cpu") {
-                EngineControlPanel()
-            }
-
             GroupBox {
                 ModelSettingsView()
             }

@@ -1,14 +1,19 @@
 import SwiftUI
 
-/// Compact glass overlay that provisions the local engine environment.
+/// Compact glass overlay that provisions the local inference environment.
 struct SetupView: View {
-    @Environment(EngineService.self) private var engine
+    @Environment(NativeInferenceEngine.self) private var engine
 
     @State private var stepStatuses: [Step: StepStatus] = Step.allCases.reduce(into: [:]) { $0[$1] = .pending }
     @State private var activeStep: Step?
     @State private var detailText = ""
     @State private var hasError = false
     @State private var setupTask: Task<Void, Never>?
+
+    private var downloadProgress: Double? {
+        if case .downloading(let p) = engine.modelState { return p }
+        return nil
+    }
 
     var body: some View {
         VStack(spacing: 0) {
@@ -39,7 +44,7 @@ struct SetupView: View {
                 .padding(.horizontal, 24)
                 .padding(.vertical, 12)
         }
-        .frame(width: 380)
+        .frame(width: 420)
         .background(.ultraThinMaterial, in: RoundedRectangle(cornerRadius: 16))
         .shadow(color: .black.opacity(0.15), radius: 24, y: 8)
         .task {
@@ -48,9 +53,6 @@ struct SetupView: View {
         }
         .onDisappear {
             setupTask?.cancel()
-        }
-        .onChange(of: engine.state) { _, newState in
-            updateDetailText(for: newState)
         }
     }
 
@@ -81,21 +83,39 @@ struct SetupView: View {
 
     private func stepRow(_ step: Step) -> some View {
         let status = stepStatuses[step] ?? .pending
+        let isDownloading = step == .modelWeights && downloadProgress != nil
 
-        return HStack(spacing: 12) {
-            statusIcon(for: status)
-                .frame(width: 20, height: 20)
+        return VStack(alignment: .leading, spacing: 6) {
+            HStack(spacing: 12) {
+                statusIcon(for: status)
+                    .frame(width: 20, height: 20)
 
-            Text(step.label)
-                .font(.callout)
-                .foregroundStyle(status == .pending ? .secondary : .primary)
+                VStack(alignment: .leading, spacing: 1) {
+                    Text(step.label)
+                        .font(.callout)
+                        .foregroundStyle(status == .pending ? .secondary : .primary)
 
-            Spacer()
+                    if isDownloading, let p = downloadProgress {
+                        Text("\(Int(p * 100))% — downloading model weights (~5.4 GB)")
+                            .font(.caption2)
+                            .foregroundStyle(.secondary)
+                    }
+                }
 
-            if status == .completed {
-                Image(systemName: "checkmark")
-                    .font(.caption.bold())
-                    .foregroundStyle(.green)
+                Spacer()
+
+                if status == .completed {
+                    Image(systemName: "checkmark")
+                        .font(.caption.bold())
+                        .foregroundStyle(.green)
+                }
+            }
+
+            if isDownloading, let p = downloadProgress {
+                ProgressView(value: p)
+                    .progressViewStyle(.linear)
+                    .padding(.leading, 32)
+                    .transition(.opacity)
             }
         }
     }
@@ -147,37 +167,28 @@ struct SetupView: View {
         // Step 1: System Check
         if stepStatuses[.systemCheck] != .completed {
             await runStep(.systemCheck) {
-                let hasEngine = engine.engineDirectory != nil
-
-                if !hasEngine {
-                    throw SetupError.message("AuraluxEngine directory not found.")
-                }
                 #if !arch(arm64)
-                    throw SetupError.message("Apple Silicon (M1 or later) is required.")
+                throw SetupError.message("Apple Silicon (M1 or later) is required.")
                 #endif
             }
             guard !hasError, !Task.isCancelled else { return }
         }
 
-        // Step 2: Environment Setup
-        if stepStatuses[.environmentSetup] != .completed {
-            if engine.isACEStepCloned && engine.isVenvReady {
-                withAnimation { stepStatuses[.environmentSetup] = .completed }
-            } else {
-                await runStep(.environmentSetup) {
-                    await engine.runSetup()
-                    if !engine.isVenvReady {
-                        if case .error(let msg) = engine.state {
-                            throw SetupError.message(msg)
-                        }
-                        throw SetupError.message("Environment setup did not complete successfully.")
-                    }
+        // Step 2: Model Weights — download from HuggingFace if missing, then load
+        if stepStatuses[.modelWeights] != .completed {
+            await runStep(.modelWeights) {
+                if engine.weightsExist {
+                    await engine.loadModels()
+                } else {
+                    try await engine.downloadAndLoad()
                 }
-                guard !hasError, !Task.isCancelled else { return }
+                if case .error(let msg) = engine.modelState {
+                    throw SetupError.message(msg)
+                }
             }
+            guard !hasError, !Task.isCancelled else { return }
         }
 
-        // All done -- brief pause then auto-dismiss
         withAnimation { detailText = "" }
         try? await Task.sleep(for: .milliseconds(750))
         if !Task.isCancelled {
@@ -211,29 +222,13 @@ struct SetupView: View {
     private func retryFromError() {
         var shouldReset = false
         for step in Step.allCases {
-            if case .error = stepStatuses[step] {
-                shouldReset = true
-            }
-            if shouldReset {
-                stepStatuses[step] = .pending
-            }
+            if case .error = stepStatuses[step] { shouldReset = true }
+            if shouldReset { stepStatuses[step] = .pending }
         }
         hasError = false
         detailText = ""
         setupTask?.cancel()
         setupTask = Task { await runAllSteps() }
-    }
-
-    private func updateDetailText(for newState: EngineState) {
-        guard let step = activeStep else { return }
-        switch step {
-        case .environmentSetup:
-            if case .settingUp(let progress) = newState {
-                withAnimation { detailText = progress }
-            }
-        default:
-            break
-        }
     }
 }
 
@@ -242,12 +237,12 @@ struct SetupView: View {
 extension SetupView {
     enum Step: Int, CaseIterable {
         case systemCheck
-        case environmentSetup
+        case modelWeights
 
         var label: String {
             switch self {
             case .systemCheck: return "System Check"
-            case .environmentSetup: return "Environment Setup"
+            case .modelWeights: return "Model Weights"
             }
         }
     }

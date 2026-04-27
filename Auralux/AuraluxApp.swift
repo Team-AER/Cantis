@@ -27,14 +27,14 @@ struct AuraluxApp: App {
     @State private var historyViewModel = HistoryViewModel()
     @State private var playerViewModel = PlayerViewModel()
     @State private var settingsViewModel = SettingsViewModel()
-    @State private var engineService: EngineService
+    @State private var engine: NativeInferenceEngine
 
     private let modelContainer: ModelContainer
 
     init() {
-        let inferenceService = InferenceService()
-        _generationViewModel = State(initialValue: GenerationViewModel(inferenceService: inferenceService))
-        _engineService = State(initialValue: EngineService(inferenceService: inferenceService))
+        let engine = NativeInferenceEngine()
+        _engine = State(initialValue: engine)
+        _generationViewModel = State(initialValue: GenerationViewModel(engine: engine))
 
         do {
             modelContainer = try ModelContainer(
@@ -58,11 +58,11 @@ struct AuraluxApp: App {
                 .environment(historyViewModel)
                 .environment(playerViewModel)
                 .environment(settingsViewModel)
-                .environment(engineService)
+                .environment(engine)
                 .onAppear {
                     appDelegate.onTerminate = {
                         playerViewModel.playerService.shutdown()
-                        engineService.shutdown()
+                        engine.shutdown()
                     }
                 }
         }
@@ -79,10 +79,5 @@ struct AuraluxApp: App {
             }
             CommandGroup(replacing: .newItem) {}
         }
-
-        Window("Auralux Logs", id: "log-viewer") {
-            LogViewerView()
-        }
-        .defaultSize(width: 800, height: 500)
     }
 }

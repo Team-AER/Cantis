@@ -1,3 +1,4 @@
+import AppKit
 import SwiftData
 import SwiftUI
 
@@ -5,16 +6,20 @@ struct ContentView: View {
     @Environment(SidebarViewModel.self) private var sidebarViewModel
     @Environment(HistoryViewModel.self) private var historyViewModel
     @Environment(GenerationViewModel.self) private var generationViewModel
-    @Environment(EngineService.self) private var engineService
+    @Environment(NativeInferenceEngine.self) private var engine
     @Environment(\.modelContext) private var modelContext
-    @Environment(\.openWindow) private var openWindow
     @State private var didBootstrap = false
+
+    @State private var playerPanelWidth: CGFloat = 320
+    @State private var dragStartWidth: CGFloat = 320
+    private let minPlayerWidth: CGFloat = 240
+    private let maxPlayerWidth: CGFloat = 640
 
     var body: some View {
         ZStack {
             mainContent
 
-            if engineService.isOnboarding {
+            if engine.isOnboarding {
                 Color.black.opacity(0.3)
                     .ignoresSafeArea()
                     .transition(.opacity)
@@ -32,8 +37,7 @@ struct ContentView: View {
             try? await HistoryService(context: modelContext).reconcileOrphans()
             historyViewModel.refresh(context: modelContext)
 
-            // Check engine status on launch
-            await engineService.checkStatus()
+            await engine.checkStatus()
         }
     }
 
@@ -44,6 +48,27 @@ struct ContentView: View {
         } else {
             ContentUnavailableView("No Track Selected", systemImage: "music.note", description: Text("Generate or select a track to preview it."))
         }
+    }
+
+    private var resizeDivider: some View {
+        ZStack {
+            Divider()
+            Color.clear
+                .frame(width: 8)
+                .contentShape(Rectangle())
+                .onHover { inside in
+                    if inside { NSCursor.resizeLeftRight.push() } else { NSCursor.pop() }
+                }
+                .gesture(
+                    DragGesture(minimumDistance: 0)
+                        .onChanged { value in
+                            let proposed = dragStartWidth - value.translation.width
+                            playerPanelWidth = max(minPlayerWidth, min(maxPlayerWidth, proposed))
+                        }
+                        .onEnded { _ in dragStartWidth = playerPanelWidth }
+                )
+        }
+        .frame(width: 8)
     }
 
     private var mainContent: some View {
@@ -67,23 +92,13 @@ struct ContentView: View {
                 .frame(maxWidth: .infinity)
 
                 if sidebarViewModel.selectedSection != .settings {
-                    Divider()
+                    resizeDivider
                     playerPanel
-                        .frame(width: 320)
+                        .frame(width: playerPanelWidth)
                 }
             }
         }
         .toolbar {
-            ToolbarItem(placement: .automatic) {
-                Button {
-                    openWindow(id: "log-viewer")
-                } label: {
-                    Image(systemName: "terminal")
-                }
-                .help("Show Logs (Cmd+Opt+L)")
-                .keyboardShortcut("l", modifiers: [.command, .option])
-            }
-
             ToolbarSpacer(.fixed)
 
             ToolbarItem(placement: .automatic) {

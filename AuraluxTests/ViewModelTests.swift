@@ -8,7 +8,7 @@ final class ViewModelTests: XCTestCase {
     // MARK: - GenerationViewModel Tags
 
     func testGenerationViewModelTagMutations() {
-        let viewModel = GenerationViewModel(inferenceService: InferenceService())
+        let viewModel = GenerationViewModel(engine: NativeInferenceEngine())
 
         viewModel.addTag("Ambient")
         viewModel.addTag("ambient")
@@ -21,14 +21,14 @@ final class ViewModelTests: XCTestCase {
     }
 
     func testAddEmptyTagIsIgnored() {
-        let viewModel = GenerationViewModel(inferenceService: InferenceService())
+        let viewModel = GenerationViewModel(engine: NativeInferenceEngine())
         viewModel.addTag("")
         viewModel.addTag("   ")
         XCTAssertEqual(viewModel.tags, ["lofi", "piano", "chill"])
     }
 
     func testRemoveNonexistentTagDoesNothing() {
-        let viewModel = GenerationViewModel(inferenceService: InferenceService())
+        let viewModel = GenerationViewModel(engine: NativeInferenceEngine())
         viewModel.addTag("rock")
         viewModel.removeTag("jazz")
         XCTAssertEqual(viewModel.tags, ["lofi", "piano", "chill", "rock"])
@@ -37,7 +37,7 @@ final class ViewModelTests: XCTestCase {
     // MARK: - GenerationViewModel Preset
 
     func testApplyingPresetUpdatesParameters() {
-        let viewModel = GenerationViewModel(inferenceService: InferenceService())
+        let viewModel = GenerationViewModel(engine: NativeInferenceEngine())
         let preset = Preset(
             name: "Test",
             summary: "Summary",
@@ -60,7 +60,7 @@ final class ViewModelTests: XCTestCase {
     // MARK: - GenerationViewModel State
 
     func testInitialStateIsIdle() {
-        let viewModel = GenerationViewModel(inferenceService: InferenceService())
+        let viewModel = GenerationViewModel(engine: NativeInferenceEngine())
         XCTAssertEqual(viewModel.state, .idle)
         XCTAssertEqual(viewModel.progress, 0)
         XCTAssertNil(viewModel.currentJobID)
@@ -68,19 +68,19 @@ final class ViewModelTests: XCTestCase {
     }
 
     func testGenerateWithEmptyPromptFails() throws {
-        let viewModel = GenerationViewModel(inferenceService: InferenceService())
+        let engine = NativeInferenceEngine()
+        let viewModel = GenerationViewModel(engine: engine)
         viewModel.prompt = "   "
 
         let config = ModelConfiguration(isStoredInMemoryOnly: true)
         let container = try ModelContainer(for: GeneratedTrack.self, Preset.self, Tag.self, configurations: config)
-        let engine = EngineService(inferenceService: InferenceService())
-        viewModel.generate(in: container.mainContext, engine: engine)
+        viewModel.generate(in: container.mainContext)
 
         XCTAssertEqual(viewModel.state, .failed("Prompt is required."))
     }
 
     func testCancelResetsState() {
-        let viewModel = GenerationViewModel(inferenceService: InferenceService())
+        let viewModel = GenerationViewModel(engine: NativeInferenceEngine())
         viewModel.prompt = "test song"
         viewModel.cancel()
 
@@ -90,13 +90,13 @@ final class ViewModelTests: XCTestCase {
     }
 
     func testGenerateWithEmptyPromptLeavesTaskNil() throws {
-        let viewModel = GenerationViewModel(inferenceService: InferenceService())
+        let engine = NativeInferenceEngine()
+        let viewModel = GenerationViewModel(engine: engine)
         viewModel.prompt = ""
 
         let config = ModelConfiguration(isStoredInMemoryOnly: true)
         let container = try ModelContainer(for: GeneratedTrack.self, Preset.self, Tag.self, configurations: config)
-        let engine = EngineService(inferenceService: InferenceService())
-        viewModel.generate(in: container.mainContext, engine: engine)
+        viewModel.generate(in: container.mainContext)
 
         // Empty-prompt guard returns before assigning generationTask.
         // Cancelling immediately should not throw or crash.
@@ -145,14 +145,14 @@ final class ViewModelTests: XCTestCase {
         let defaults = UserDefaults(suiteName: suiteName)!
 
         let vm1 = SettingsViewModel(defaults: defaults)
-        vm1.quantizationMode = .int8
+        vm1.quantizationMode = .fp16
         vm1.lowMemoryMode = true
         vm1.autoStartServer = false
         vm1.maxConcurrentJobs = 3
         vm1.defaultExportFormat = .alac  // .flac is unavailable, use .alac
 
         let vm2 = SettingsViewModel(defaults: defaults)
-        XCTAssertEqual(vm2.quantizationMode, .int8)
+        XCTAssertEqual(vm2.quantizationMode, .fp16)
         XCTAssertTrue(vm2.lowMemoryMode)
         XCTAssertFalse(vm2.autoStartServer)
         XCTAssertEqual(vm2.maxConcurrentJobs, 3)
@@ -187,7 +187,7 @@ final class ViewModelTests: XCTestCase {
     func testSettingsResetToDefaults() {
         let defaults = UserDefaults(suiteName: "test-\(UUID().uuidString)")!
         let vm = SettingsViewModel(defaults: defaults)
-        vm.quantizationMode = .int8
+        vm.quantizationMode = .fp16
         vm.lowMemoryMode = true
         vm.maxConcurrentJobs = 4
 

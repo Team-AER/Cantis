@@ -1,16 +1,8 @@
 import SwiftUI
 
 struct ModelSettingsView: View {
-    @Environment(EngineService.self) private var engine
-    @State private var modelStatus: ModelStatus = .unknown
-    @State private var isDownloading = false
-    @State private var errorMessage: String?
-    @State private var serverRunning = false
+    @Environment(NativeInferenceEngine.self) private var engine
 
-    private let manager = ModelManagerService()
-
-    // True on Macs with ≤ 16 GB unified memory — used to surface a passive
-    // note that the memory-efficient profile is active.
     private var isLowMemoryMac: Bool {
         ProcessInfo.processInfo.physicalMemory <= 17_179_869_184
     }
@@ -20,69 +12,58 @@ struct ModelSettingsView: View {
             Text("Models")
                 .font(.headline)
 
-            engineStatusSection
-
-            if let errorMessage {
-                Label(errorMessage, systemImage: "exclamationmark.triangle")
-                    .foregroundStyle(.red)
-                    .font(.callout)
-            }
-
+            modelStateSection
             modelListSection
-
-            actionsSection
-        }
-        .task {
-            await refreshStatus()
+            footerSection
         }
     }
 
-    // MARK: - Engine Status
+    // MARK: - Model State Section
 
     @ViewBuilder
-    private var engineStatusSection: some View {
-        VStack(alignment: .leading, spacing: 8) {
-            HStack(spacing: 8) {
-                Circle()
-                    .fill(serverRunning ? (modelStatus.ditLoaded ? .green : .yellow) : .red)
-                    .frame(width: 8, height: 8)
+    private var modelStateSection: some View {
+        HStack(alignment: .top, spacing: 8) {
+            Circle()
+                .fill(statusColor)
+                .frame(width: 8, height: 8)
+                .padding(.top, 3)
 
-                if serverRunning {
-                    if modelStatus.ditLoaded {
-                        Text("Engine ready — \(modelStatus.engine)")
-                            .font(.callout)
-                            .foregroundStyle(.secondary)
-                    } else if isDownloading {
-                        downloadProgressLabel
-                    } else {
-                        Text("Server running, models not loaded")
-                            .font(.callout)
-                            .foregroundStyle(.secondary)
-                    }
-                } else {
-                    Text("Server not running")
-                        .font(.callout)
+            VStack(alignment: .leading, spacing: 4) {
+                Text(statusTitle)
+                    .font(.callout)
+
+                switch engine.modelState {
+                case .notDownloaded:
+                    Text("Open setup to download model weights automatically (~5.4 GB).")
+                        .font(.caption)
                         .foregroundStyle(.secondary)
-                }
-            }
-
-            if serverRunning && modelStatus.ditLoaded {
-                HStack(spacing: 16) {
-                    Label(modelStatus.device, systemImage: "cpu")
-                    if !modelStatus.ditModel.isEmpty {
-                        Label(modelStatus.ditModel, systemImage: "waveform")
+                case .downloading(let progress):
+                    VStack(alignment: .leading, spacing: 4) {
+                        ProgressView(value: progress)
+                            .progressViewStyle(.linear)
+                        Text("Downloading \(Int(progress * 100))% — ~5.4 GB total")
+                            .font(.caption2)
+                            .foregroundStyle(.secondary)
                     }
-                    if modelStatus.llmLoaded, !modelStatus.llmModel.isEmpty {
-                        Label(modelStatus.llmModel, systemImage: "brain")
+                case .error(let message):
+                    Text(message)
+                        .font(.caption)
+                        .foregroundStyle(.red)
+                        .lineLimit(3)
+                case .loading:
+                    HStack(spacing: 6) {
+                        ProgressView().controlSize(.small)
+                        Text("Loading...")
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
                     }
+                case .ready:
                     if isLowMemoryMac {
-                        Label("Memory mode", systemImage: "memorychip")
-                            .foregroundStyle(.orange.opacity(0.8))
-                            .help("Your Mac has 16 GB of unified memory. The server runs in memory-efficient mode (float16 precision) to stay within budget. Override: export AURALUX_MEMORY_PROFILE=quality")
+                        Label("16 GB Mac — running in memory-efficient mode", systemImage: "memorychip")
+                            .font(.caption)
+                            .foregroundStyle(.orange.opacity(0.9))
                     }
                 }
-                .font(.caption)
-                .foregroundStyle(.tertiary)
             }
         }
         .padding(12)
@@ -90,38 +71,24 @@ struct ModelSettingsView: View {
         .background(.quaternary.opacity(0.3), in: RoundedRectangle(cornerRadius: 8))
     }
 
-    // MARK: - Download Progress
-
-    @ViewBuilder
-    private var downloadProgressLabel: some View {
-        if case .settingUp(let progress) = engine.state {
-            VStack(alignment: .leading, spacing: 4) {
-                Text(progress)
-                    .font(.callout)
-                    .foregroundStyle(.secondary)
-                if let pct = parsePercent(from: progress) {
-                    ProgressView(value: Double(pct), total: 100)
-                        .frame(width: 160)
-                        .controlSize(.small)
-                }
-            }
-        } else {
-            HStack(spacing: 6) {
-                ProgressView().controlSize(.small)
-                Text("Downloading models …")
-                    .font(.callout)
-                    .foregroundStyle(.secondary)
-            }
+    private var statusColor: Color {
+        switch engine.modelState {
+        case .ready:        return .green
+        case .loading:      return .orange
+        case .downloading:  return .blue
+        case .notDownloaded: return .gray
+        case .error:        return .red
         }
     }
 
-    private func parsePercent(from string: String) -> Int? {
-        // Match the explicit "N%" token so strings like "Step 1 of 10" don't
-        // accidentally parse as a percentage.
-        guard let match = string.range(of: #"\d+%"#, options: .regularExpression) else {
-            return nil
+    private var statusTitle: String {
+        switch engine.modelState {
+        case .ready:                    return "Models loaded — ready to generate"
+        case .loading:                  return "Loading model weights…"
+        case .downloading(let p):       return "Downloading model weights (\(Int(p * 100))%)"
+        case .notDownloaded:            return "Weights not found"
+        case .error:                    return "Failed to load models"
         }
-        return Int(string[match].dropLast()) // drop the trailing '%'
     }
 
     // MARK: - Model List
@@ -129,9 +96,10 @@ struct ModelSettingsView: View {
     @ViewBuilder
     private var modelListSection: some View {
         VStack(spacing: 0) {
-            ForEach(ModelManagerService.knownArtifacts) { artifact in
+            let artifacts = [ModelManagerService.mlxArtifact] + ModelManagerService.upstreamVariants
+            ForEach(artifacts) { artifact in
                 modelRow(artifact)
-                if artifact.id != ModelManagerService.knownArtifacts.last?.id {
+                if artifact.id != artifacts.last?.id {
                     Divider()
                 }
             }
@@ -153,103 +121,43 @@ struct ModelSettingsView: View {
 
             Spacer()
 
-            VStack(alignment: .trailing, spacing: 4) {
-                Text(String(format: "~%.1f GB", artifact.estimatedSizeGB))
-                    .font(.caption)
-                    .foregroundStyle(.tertiary)
-
-                statusBadge(for: artifact)
-            }
+            Text(String(format: "~%.1f GB", artifact.estimatedSizeGB))
+                .font(.caption)
+                .foregroundStyle(.tertiary)
         }
         .padding(.horizontal, 12)
         .padding(.vertical, 10)
     }
 
-    @ViewBuilder
-    private func statusBadge(for artifact: ModelArtifact) -> some View {
-        if !serverRunning {
-            Text("Offline")
-                .font(.caption2)
-                .foregroundStyle(.secondary)
-                .padding(.horizontal, 6)
-                .padding(.vertical, 2)
-                .background(.quaternary, in: Capsule())
-        } else if isModelLoaded(artifact) {
-            Label("Loaded", systemImage: "checkmark.circle.fill")
-                .font(.caption)
-                .foregroundStyle(.green)
-        } else if isDownloading {
-            ProgressView()
-                .controlSize(.small)
-        } else {
-            Text("Not loaded")
-                .font(.caption2)
-                .foregroundStyle(.orange)
-                .padding(.horizontal, 6)
-                .padding(.vertical, 2)
-                .background(.orange.opacity(0.1), in: Capsule())
-        }
-    }
-
-    private func isModelLoaded(_ artifact: ModelArtifact) -> Bool {
-        switch artifact.name {
-        case _ where artifact.name.contains("turbo") || artifact.name.contains("base") || artifact.name.contains("sft"):
-            return modelStatus.ditLoaded
-        case _ where artifact.name.contains("lm"):
-            return modelStatus.llmLoaded
-        case "vae":
-            return modelStatus.ditLoaded
-        default:
-            return false
-        }
-    }
-
     // MARK: - Actions
 
     @ViewBuilder
-    private var actionsSection: some View {
+    private var footerSection: some View {
         HStack {
-            if serverRunning && !modelStatus.ditLoaded && !isDownloading {
-                Button("Download Models") {
-                    Task { await downloadModels() }
+            switch engine.modelState {
+            case .error:
+                Button("Retry Load") {
+                    Task { await engine.loadModels() }
                 }
                 .buttonStyle(.borderedProminent)
                 .controlSize(.small)
+            case .notDownloaded:
+                Text("python tools/convert_weights.py")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                    .textSelection(.enabled)
+                    .padding(.horizontal, 8)
+                    .padding(.vertical, 4)
+                    .background(.quaternary.opacity(0.5), in: RoundedRectangle(cornerRadius: 4))
+            default:
+                EmptyView()
             }
-
             Spacer()
-
-            Button("Refresh") {
-                Task { await refreshStatus() }
-            }
-            .controlSize(.small)
         }
-        .font(.callout)
 
-        Text("Models are auto-downloaded from HuggingFace on first generation. Stored in the ACE-Step checkpoints directory.")
+        Text("Weights stored in ~/Library/Application Support/Auralux/Models/ace-step-v1.5-mlx/")
             .font(.caption2)
             .foregroundStyle(.tertiary)
-    }
-
-    // MARK: - Networking
-
-    private func refreshStatus() async {
-        serverRunning = await manager.isServerHealthy()
-        let status = await manager.fetchModelStatus()
-        modelStatus = status
-        errorMessage = status.error
-    }
-
-    private func downloadModels() async {
-        isDownloading = true
-        errorMessage = nil
-        do {
-            try await manager.triggerModelDownload()
-            try? await Task.sleep(for: .seconds(2))
-            await refreshStatus()
-        } catch {
-            errorMessage = "Download failed: \(error.localizedDescription)"
-        }
-        isDownloading = false
+            .textSelection(.enabled)
     }
 }
