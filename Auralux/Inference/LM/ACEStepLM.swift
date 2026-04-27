@@ -19,7 +19,7 @@ struct ACEStepLMConfig: Codable, Sendable {
     var headDim: Int = 128
 
     init(
-        vocabSize: Int = 151643,
+        vocabSize: Int = 217204,
         hiddenSize: Int = 1024,
         numHiddenLayers: Int = 28,
         numAttentionHeads: Int = 16,

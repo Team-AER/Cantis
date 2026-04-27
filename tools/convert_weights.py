@@ -522,6 +522,16 @@ def convert_vae(src_safetensors: Path, output_dir: Path, dtype_str: str) -> bool
             if mlx_key:
                 out[mlx_key] = np.ascontiguousarray(t.astype(np_dtype))
 
+        elif key.endswith(".weight"):
+            consumed.add(key)
+            w = tensors[key]
+            if len(w.shape) == 3:
+                is_transpose = ".conv_t1" in key
+                w = w.transpose(1, 2, 0) if is_transpose else w.transpose(0, 2, 1)
+            mlx_key = _remap_vae_key(key)
+            if mlx_key:
+                out[mlx_key] = np.ascontiguousarray(w.astype(np_dtype))
+
     output_dir.mkdir(parents=True, exist_ok=True)
     out_path = output_dir / "vae_weights.safetensors"
     print(f"  Saving {len(out)} tensors → {out_path} …")

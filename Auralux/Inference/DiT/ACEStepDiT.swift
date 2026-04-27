@@ -62,13 +62,12 @@ struct AceStepConfig: Sendable {
 
 // MARK: - Sinusoidal timestep embedding
 
-private func sinusoidalEmbedding(t: MLXArray, dim: Int, scale: Float = 1000.0) -> MLXArray {
-    let scaledT = t * scale
-    let half    = dim / 2
-    let freqs   = exp(
+private func sinusoidalEmbedding(t: MLXArray, dim: Int) -> MLXArray {
+    let half  = dim / 2
+    let freqs = exp(
         MLXArray(Array(0..<half).map { Float($0) }) * (-log(10_000.0) / Float(half))
     )
-    let tCol = scaledT.reshaped([-1, 1]).asType(.float32)
+    let tCol = t.reshaped([-1, 1]).asType(.float32)
     let args = tCol * freqs.reshaped([1, -1])
     return concatenated([cos(args), sin(args)], axis: -1)
 }
@@ -92,7 +91,8 @@ final class TimestepEmbedder: Module, @unchecked Sendable {
     // Returns (temb [B, H], timestepProj [B, 6, H])
     func callAsFunction(_ t: MLXArray) -> (MLXArray, MLXArray) {
         let freqDim = linear1.weight.shape[1]
-        let tFreq   = sinusoidalEmbedding(t: t, dim: freqDim)
+        let tScaled = t * 1000.0
+        let tFreq   = sinusoidalEmbedding(t: tScaled, dim: freqDim)  // t ∈ [0,1], scaled to 1000
         let temb    = linear2(silu(linear1(tFreq.asType(t.dtype))))
         let proj    = timeProj(silu(temb))
         let H       = temb.shape[1]

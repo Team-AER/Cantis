@@ -58,7 +58,7 @@ final class OobleckResUnit: Module, @unchecked Sendable {
     func callAsFunction(_ x: MLXArray) -> MLXArray {
         var h = conv1(snake1(x))
         h = conv2(snake2(h))
-        return x + h
+        return (x + h) / sqrt(2.0)
     }
 }
 
