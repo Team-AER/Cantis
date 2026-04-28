@@ -1,23 +1,57 @@
 name: CI
 
 on:
-  push:
-  pull_request:
+  workflow_dispatch:
+  # Re-enable when the main branch is ready for automatic CI.
+  # push:
+  #   branches:
+  #     - main
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
 
 jobs:
   swift-tests:
     name: Swift tests (macOS)
-    # Pin to macOS 15 — app requires macOS 15+ and macos-latest may lag behind.
-    runs-on: macos-15
+    # Package.swift requires Swift 6.2 and macOS 26 SDKs.
+    # Xcode 26 on the macOS 26 runner provides both.
+    runs-on: macos-26
     steps:
       - name: Checkout
         uses: actions/checkout@v6
 
-      - name: Show Swift version
-        run: swift --version
+      - name: Show toolchain versions
+        run: |
+          swift --version
+          xcodebuild -version
+          xcrun --sdk macosx --show-sdk-version
 
       - name: Build
         run: swift build
 
-      - name: Run tests
-        run: swift test
+      - name: Run CI-safe tests
+        # The MLX/Metal inference suites require local GPU/runtime support and
+        # are documented in-test as Xcode-run only. Keep CI on deterministic
+        # model/service/view-model coverage for now.
+        run: >-
+          swift test
+          --skip 'ACEStepDiTTests|ACEStepLMTests|FeasibilityProbeTests|Qwen3ConditioningTests|Qwen3RealWeightsTests'
+
+  python-syntax:
+    name: Python syntax check
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+
+      - name: Set up Python
+        uses: actions/setup-python@v6
+        with:
+          python-version: '3.11'
+
+      - name: Compile Python scripts
+        run: python -m py_compile modeling_acestep_v15_turbo.py tools/convert_weights.py

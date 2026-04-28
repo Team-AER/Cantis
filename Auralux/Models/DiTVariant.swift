@@ -75,8 +75,19 @@ enum DiTVariant: String, Codable, CaseIterable, Identifiable, Sendable {
     /// Whether converted MLX weights exist on HF and the engine can load this variant.
     var isAvailable: Bool {
         switch self {
-        case .turbo, .sft: return true
+        case .turbo, .sft, .base: return true
         default: return false
         }
     }
+
+    /// Whether the app can download this variant directly (vs. requiring the conversion script).
+    var canDownloadInApp: Bool {
+        switch self {
+        case .turbo, .sft, .base: return true
+        default: return false
+        }
+    }
+
+    /// Non-turbo variants symlink lm/, vae/, text/ from the turbo directory.
+    var requiresTurboBase: Bool { self != .turbo }
 }

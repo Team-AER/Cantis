@@ -63,6 +63,11 @@ final class NativeInferenceEngine {
     private(set) var isGenerating: Bool = false
     var isOnboarding: Bool = false
 
+    /// Which variant is currently being downloaded (nil = none).
+    private(set) var activeDownloadVariant: DiTVariant? = nil
+    /// Overall download progress for `activeDownloadVariant` in [0, 1].
+    private(set) var downloadProgress: Double = 0
+
     private var dit: ACEStepDiT?
     private var lm: ACEStepLMModel?
     private var vae: DCHiFiGANVAE?
@@ -85,8 +90,8 @@ final class NativeInferenceEngine {
         FileUtilities.modelDirectory.appendingPathComponent(variant.mlxDirectoryName, isDirectory: true)
     }
 
-    var weightsExist: Bool {
-        let dir = mlxModelDirectory(for: currentVariant)
+    func isDownloaded(_ variant: DiTVariant) -> Bool {
+        let dir = mlxModelDirectory(for: variant)
         let required = [
             "dit/dit_weights.safetensors",
             "dit/silence_latent.safetensors",
@@ -100,6 +105,8 @@ final class NativeInferenceEngine {
             FileManager.default.fileExists(atPath: dir.appendingPathComponent(path).path)
         }
     }
+
+    var weightsExist: Bool { isDownloaded(currentVariant) }
 
     // MARK: - App Lifecycle
 
@@ -126,21 +133,64 @@ final class NativeInferenceEngine {
 
     // MARK: - Model Download + Load
 
-    /// Downloads all weights from HuggingFace then loads models into memory.
-    /// Throws on download failure; loading errors are reflected in `modelState`.
-    func downloadAndLoad() async throws {
-        guard !isGenerating else { return }
-        modelState = .downloading(progress: 0)
-        log.info("Downloading model weights from HuggingFace", category: .inference)
-
-        try await ModelDownloader.shared.downloadAll(to: mlxModelDirectory(for: currentVariant)) { [weak self] progress in
-            Task { @MainActor [weak self] in
-                self?.modelState = .downloading(progress: progress)
+    /// Downloads a specific variant from HuggingFace. Non-app-downloadable variants
+    /// (XL) will fail with a script instruction. SFT/base require turbo to be
+    /// downloaded first (they symlink its shared components).
+    func download(_ variant: DiTVariant) async {
+        guard activeDownloadVariant == nil else { return }
+        guard !isDownloaded(variant) else {
+            if variant == currentVariant { await loadModels() }
+            return
+        }
+        guard variant.canDownloadInApp else {
+            if variant == currentVariant {
+                modelState = .error(
+                    "Run `python tools/convert_weights.py --variant \(variant.rawValue)` " +
+                    "to convert this model (turbo must be converted first)."
+                )
             }
+            return
         }
 
-        log.info("Download complete — loading models", category: .inference)
-        await loadModels()
+        activeDownloadVariant = variant
+        downloadProgress = 0
+        if variant == currentVariant { modelState = .downloading(progress: 0) }
+        log.info("Downloading \(variant.rawValue) weights from HuggingFace", category: .inference)
+
+        do {
+            let variantDir = mlxModelDirectory(for: variant)
+            let turboDir   = mlxModelDirectory(for: .turbo)
+            try await ModelDownloader.shared.download(
+                variant: variant,
+                to: variantDir,
+                turboDirectory: turboDir
+            ) { [weak self] progress in
+                Task { @MainActor [weak self] in
+                    self?.downloadProgress = progress
+                    if variant == self?.currentVariant {
+                        self?.modelState = .downloading(progress: progress)
+                    }
+                }
+            }
+            log.info("Download complete for \(variant.rawValue)", category: .inference)
+        } catch {
+            log.error("Download failed for \(variant.rawValue): \(error)", category: .inference)
+            if variant == currentVariant {
+                modelState = .error(error.localizedDescription)
+            }
+            activeDownloadVariant = nil
+            return
+        }
+
+        activeDownloadVariant = nil
+        if variant == currentVariant { await loadModels() }
+    }
+
+    /// Downloads turbo then loads — used by SetupView for first-time onboarding.
+    func downloadAndLoad() async throws {
+        guard !isGenerating else { return }
+        await download(.turbo)
+        if case .error(let msg) = modelState { throw NativeEngineError.generationFailed(msg) }
     }
 
     // MARK: - Model Loading

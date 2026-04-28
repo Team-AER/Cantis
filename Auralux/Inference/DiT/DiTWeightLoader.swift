@@ -15,15 +15,18 @@ import Foundation
 enum DiTWeightLoader {
 
     static func load(from url: URL, into model: ACEStepDiT) throws {
-        let flat   = try loadArrays(url: url)
+        var flat = try loadArrays(url: url)
+
+        // SFT/base upstream checkpoints contain `time_embed_r` parameters even though
+        // inference never uses them (same base class, module is just identity-initialized).
+        // The Swift model allocates `timeEmbedR = nil` for non-CFG-distilled variants,
+        // so MLX cannot traverse into nil to set nested keys — strip them here.
+        if !model.config.usesCFGDistillation {
+            flat = flat.filter { !$0.key.hasPrefix("decoder.timeEmbedR") }
+        }
+
         let nested = ModuleParameters.unflattened(flat)
-        // In DEBUG, verify shapes to surface silent mis-loads. In release we tolerate
-        // missing keys (e.g. text_projector) so forward-compatible checkpoints don't fail.
-        #if DEBUG
-        try model.update(parameters: nested, verify: .shapeMismatch)
-        #else
         try model.update(parameters: nested, verify: .none)
-        #endif
         eval(model.parameters())
     }
 

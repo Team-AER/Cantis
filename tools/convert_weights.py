@@ -892,15 +892,14 @@ def validate_output(output_dir: Path) -> bool:
 
 _MODELS_DIR = Path.home() / "Library" / "Application Support" / "Auralux" / "Models"
 
-# dit_repo:    HuggingFace repo containing the DiT checkpoint.
-# dit_subdir:  Subdirectory within the repo (None = repo root).
+# dit_repo:    HuggingFace repo ID containing the DiT checkpoint.
+# dit_subdir:  Subdirectory within the repo for non-standalone variants (e.g. turbo
+#              lives under a subdir in the main Ace-Step1.5 repo). None = repo root.
 # output_name: Local model directory and HF Team-AER repo suffix.
 # sharded:     True if the DiT uses model.safetensors.index.json + shard files.
 # xl:          True for XL (2560-dim decoder) checkpoints.
-#
-# NOTE: Verify these repo paths against https://huggingface.co/ACE-Step before
-# running — ACE-Step may reorganise or rename repos between releases.
 _VARIANT_CONFIG = {
+    # Turbo: subdir in the multi-variant ACE-Step/Ace-Step1.5 repo.
     "turbo": {
         "dit_repo":    "ACE-Step/Ace-Step1.5",
         "dit_subdir":  "acestep-v15-turbo",
@@ -908,37 +907,39 @@ _VARIANT_CONFIG = {
         "sharded":     False,
         "xl":          False,
     },
+    # SFT / base: standalone repos at the ACE-Step org root.
     "sft": {
-        "dit_repo":    "ACE-Step/Ace-Step1.5",
-        "dit_subdir":  "acestep-v15-sft",
+        "dit_repo":    "ACE-Step/acestep-v15-sft",
+        "dit_subdir":  None,
         "output_name": "ace-step-v1.5-sft-mlx",
         "sharded":     False,
         "xl":          False,
     },
     "base": {
-        "dit_repo":    "ACE-Step/Ace-Step1.5",
-        "dit_subdir":  "acestep-v15-base",
+        "dit_repo":    "ACE-Step/acestep-v15-base",
+        "dit_subdir":  None,
         "output_name": "ace-step-v1.5-base-mlx",
         "sharded":     False,
         "xl":          False,
     },
+    # XL: standalone repos, 4-shard safetensors.
     "xl-turbo": {
-        "dit_repo":    "ACE-Step/Ace-Step1.5",
-        "dit_subdir":  "acestep-v15-xl-turbo",
+        "dit_repo":    "ACE-Step/acestep-v15-xl-turbo",
+        "dit_subdir":  None,
         "output_name": "ace-step-v1.5-xl-turbo-mlx",
         "sharded":     True,
         "xl":          True,
     },
     "xl-sft": {
-        "dit_repo":    "ACE-Step/Ace-Step1.5",
-        "dit_subdir":  "acestep-v15-xl-sft",
+        "dit_repo":    "ACE-Step/acestep-v15-xl-sft",
+        "dit_subdir":  None,
         "output_name": "ace-step-v1.5-xl-sft-mlx",
         "sharded":     True,
         "xl":          True,
     },
     "xl-base": {
-        "dit_repo":    "ACE-Step/Ace-Step1.5",
-        "dit_subdir":  "acestep-v15-xl-base",
+        "dit_repo":    "ACE-Step/acestep-v15-xl-base",
+        "dit_subdir":  None,
         "output_name": "ace-step-v1.5-xl-base-mlx",
         "sharded":     True,
         "xl":          True,
@@ -951,10 +952,12 @@ def default_output_dir(variant: str) -> Path:
 
 
 def _symlink_shared_components(out_dir: Path, turbo_dir: Path) -> None:
-    """Symlink VAE, LM, text, and silence_latent from the turbo output dir.
+    """Symlink VAE, LM, and text directories from the turbo output dir.
 
-    The SFT checkpoint shares all non-DiT components with turbo.
+    All variants share the same VAE, 5 Hz LM, and Qwen3 text encoder.
     Relative symlinks keep the directory relocatable.
+    silence_latent is NOT symlinked here — each variant converts its own from
+    the upstream repo's silence_latent.pt.
     """
     for subdir in ("vae", "lm", "text"):
         src = turbo_dir / subdir
@@ -970,19 +973,6 @@ def _symlink_shared_components(out_dir: Path, turbo_dir: Path) -> None:
             print(f"  Symlinked {subdir}/ → {rel}")
         else:
             print(f"  WARNING: turbo {subdir}/ not found at {src} — run turbo conversion first.")
-
-    # silence_latent lives under dit/
-    src_silence = turbo_dir / "dit" / "silence_latent.safetensors"
-    dst_silence = out_dir / "dit" / "silence_latent.safetensors"
-    dst_silence.parent.mkdir(parents=True, exist_ok=True)
-    if dst_silence.is_symlink() or dst_silence.exists():
-        dst_silence.unlink()
-    if src_silence.exists():
-        rel = os.path.relpath(src_silence, dst_silence.parent)
-        os.symlink(rel, dst_silence)
-        print(f"  Symlinked dit/silence_latent.safetensors → {rel}")
-    else:
-        print(f"  WARNING: turbo silence_latent not found at {src_silence} — run turbo conversion first.")
 
 
 def main() -> int:
@@ -1074,31 +1064,33 @@ def main() -> int:
     ok = True
 
     # ── DiT conversion ────────────────────────────────────────────────────────
-    if not args.skip_dit:
-        dit_subdir = vcfg["dit_subdir"]
-        dit_repo   = vcfg["dit_repo"]
-        is_sharded = vcfg["sharded"]
-        dit_cache  = cache_dir / "dit" / dit_subdir
+    # Determine the local cache directory for this variant's raw downloads.
+    # Turbo: subdir inside ACE-Step/Ace-Step1.5 → cache under its subdir name.
+    # All others: standalone repos → cache under the variant name.
+    dit_subdir    = vcfg["dit_subdir"]
+    dit_repo      = vcfg["dit_repo"]
+    is_sharded    = vcfg["sharded"]
+    is_standalone = dit_subdir is None   # True for SFT, base, and all XL variants
+    dit_cache     = cache_dir / "dit" / (variant if is_standalone else dit_subdir)
 
+    if not args.skip_dit:
         if is_sharded:
-            # Sharded: look for index file; single-file fallback for completeness.
             index_file  = dit_cache / "model.safetensors.index.json"
             single_file = dit_cache / "model.safetensors"
-            needs_download = not index_file.exists() and not single_file.exists()
-            if needs_download:
-                print(f"\n[DiT] Downloading sharded {dit_subdir} from {dit_repo} …")
+            if not index_file.exists() and not single_file.exists():
+                print(f"\n[DiT] Downloading sharded {dit_repo} …")
                 _download_dir(
                     repo_id=dit_repo,
-                    subdir=dit_subdir,
-                    local_dir=dit_cache.parent,
+                    subdir=None,
+                    local_dir=dit_cache,
                     token=token,
-                    patterns=[f"{dit_subdir}/*"],
+                    patterns=["*.safetensors*", "*.pt"],
                 )
             if index_file.exists():
                 print(f"\n[DiT] Converting sharded → {out_dir}/dit/ …")
                 ok &= convert_dit(dit_cache, out_dir / "dit", args.dtype, sharded=True)
             elif single_file.exists():
-                print(f"\n[DiT] Converting single-file (expected sharded) → {out_dir}/dit/ …")
+                print(f"\n[DiT] Converting → {out_dir}/dit/ …")
                 ok &= convert_dit(single_file, out_dir / "dit", args.dtype, sharded=False)
             else:
                 print(f"ERROR: DiT weights not found in {dit_cache}", file=sys.stderr)
@@ -1106,14 +1098,23 @@ def main() -> int:
         else:
             dit_src = dit_cache / "model.safetensors"
             if not dit_src.exists():
-                print(f"\n[DiT] Downloading {dit_subdir} from {dit_repo} …")
-                _download_dir(
-                    repo_id=dit_repo,
-                    subdir=dit_subdir,
-                    local_dir=dit_cache.parent,
-                    token=token,
-                    patterns=[f"{dit_subdir}/*"],
-                )
+                print(f"\n[DiT] Downloading {dit_repo} …")
+                if is_standalone:
+                    _download_dir(
+                        repo_id=dit_repo,
+                        subdir=None,
+                        local_dir=dit_cache,
+                        token=token,
+                        patterns=["*.safetensors", "*.pt"],
+                    )
+                else:
+                    _download_dir(
+                        repo_id=dit_repo,
+                        subdir=dit_subdir,
+                        local_dir=dit_cache.parent,
+                        token=token,
+                        patterns=[f"{dit_subdir}/*"],
+                    )
             if dit_src.exists():
                 print(f"\n[DiT] Converting → {out_dir}/dit/ …")
                 ok &= convert_dit(dit_src, out_dir / "dit", args.dtype, sharded=False)
@@ -1121,19 +1122,19 @@ def main() -> int:
                 print(f"ERROR: DiT weights not found at {dit_src}", file=sys.stderr)
                 ok = False
 
+    # ── Silence latent — every upstream repo includes silence_latent.pt ───────
+    if not args.skip_dit:
+        silence_src = dit_cache / "silence_latent.pt"
+        if silence_src.exists():
+            ok &= convert_silence_latent(silence_src, out_dir / "dit", args.dtype)
+        else:
+            print(f"ERROR: silence_latent.pt not found at {silence_src}", file=sys.stderr)
+            ok = False
+
     # ── Shared components: convert for turbo, symlink for others ─────────────
     is_turbo = variant == "turbo"
 
     if is_turbo:
-        # Turbo: convert silence_latent alongside the DiT weights.
-        if not args.skip_dit:
-            dit_subdir  = vcfg["dit_subdir"]
-            silence_src = cache_dir / "dit" / dit_subdir / "silence_latent.pt"
-            if silence_src.exists():
-                ok &= convert_silence_latent(silence_src, out_dir / "dit", args.dtype)
-            else:
-                print(f"ERROR: silence_latent.pt not found at {silence_src}", file=sys.stderr)
-                ok = False
 
         # ── LM conversion ─────────────────────────────────────────────────────
         if not args.skip_lm:
@@ -1203,8 +1204,8 @@ def main() -> int:
                 ok = False
 
     else:
-        # Non-turbo: symlink shared components from the turbo output dir.
-        print(f"\n[Shared] Symlinking VAE / LM / text / silence_latent from turbo dir …")
+        # Non-turbo: symlink VAE / LM / text from the turbo output dir.
+        print(f"\n[Shared] Symlinking VAE / LM / text from turbo dir …")
         _symlink_shared_components(out_dir, turbo_dir)
 
     # ── Validate output ───────────────────────────────────────────────────────

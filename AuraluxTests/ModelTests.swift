@@ -178,6 +178,6 @@ final class ModelTests: XCTestCase {
 
     func testKnownArtifactsNotEmpty() {
         XCTAssertFalse(ModelManagerService.knownArtifacts.isEmpty)
-        XCTAssertTrue(ModelManagerService.knownArtifacts.contains { $0.name == "acestep-v15-turbo" })
+        XCTAssertTrue(ModelManagerService.knownArtifacts.contains { $0.name == "ace-step-v1.5-turbo-mlx" })
     }
 }

@@ -3,51 +3,88 @@ import Foundation
 /// Downloads ACE-Step MLX weights from HuggingFace into the app's model directory.
 ///
 /// Files are downloaded sequentially; overall progress is weighted by file size.
-/// Already-present files are skipped so interrupted downloads are resumable at
-/// the file-granularity level.
+/// Already-present files are skipped so interrupted downloads are resumable.
 actor ModelDownloader {
 
     static let shared = ModelDownloader()
 
-    private static let baseURL =
-        "https://huggingface.co/Team-AER/ace-step-v1.5-mlx/resolve/main/"
+    private static let hfBase = "https://huggingface.co"
 
-    // Paths relative to the model directory root, with approximate byte sizes
-    // used for weighted overall-progress calculation.
-    private static let manifest: [(path: String, bytes: Int64)] = [
-        ("dit/dit_weights.safetensors",   3_900_000_000),
-        ("dit/silence_latent.safetensors",    1_920_000),
-        ("lm/lm_weights.safetensors",     1_280_000_000),
-        ("vae/vae_weights.safetensors",     169_000_000),
-        ("lm/lm_tokenizer.json",             24_300_000),
-        ("lm/lm_tokenizer_config.json",      13_100_000),
-        ("lm/lm_vocab.json",                  2_600_000),
-        ("lm/lm_merges.txt",                  1_600_000),
-        ("lm/lm_added_tokens.json",           2_100_000),
-        ("lm/lm_special_tokens_map.json",     1_700_000),
-        ("lm/lm_chat_template.jinja",             4_100),
-        ("lm/lm_config.json",                     1_400),
-    ]
+    // MARK: - Per-variant manifests
 
-    private static let totalBytes: Int64 = manifest.reduce(0) { $0 + $1.bytes }
+    struct ManifestEntry: Sendable {
+        let path: String
+        let repoID: String
+        let bytes: Int64
+    }
 
-    /// Downloads all missing model files to `directory`.
-    ///
-    /// - Parameters:
-    ///   - directory: The model root (ace-step-v1.5-mlx/). Sub-directories are created automatically.
-    ///   - onProgress: Called on an arbitrary thread with an overall fraction in [0, 1].
-    func downloadAll(
+    /// Returns the download manifest for a variant. Empty = script-only (XL variants).
+    static func manifest(for variant: DiTVariant) -> [ManifestEntry] {
+        switch variant {
+        case .turbo:
+            let repo = "Team-AER/ace-step-v1.5-mlx"
+            return [
+                ManifestEntry(path: "dit/dit_weights.safetensors",   repoID: repo, bytes: 3_900_000_000),
+                ManifestEntry(path: "dit/silence_latent.safetensors", repoID: repo, bytes:     1_920_000),
+                ManifestEntry(path: "lm/lm_weights.safetensors",      repoID: repo, bytes: 1_280_000_000),
+                ManifestEntry(path: "vae/vae_weights.safetensors",    repoID: repo, bytes:   169_000_000),
+                ManifestEntry(path: "text/text_weights.safetensors",  repoID: repo, bytes: 1_200_000_000),
+                ManifestEntry(path: "text/text_vocab.json",           repoID: repo, bytes:     5_000_000),
+                ManifestEntry(path: "text/text_merges.txt",           repoID: repo, bytes:     1_500_000),
+                ManifestEntry(path: "lm/lm_tokenizer.json",          repoID: repo, bytes:    24_300_000),
+                ManifestEntry(path: "lm/lm_tokenizer_config.json",   repoID: repo, bytes:    13_100_000),
+                ManifestEntry(path: "lm/lm_vocab.json",              repoID: repo, bytes:     2_600_000),
+                ManifestEntry(path: "lm/lm_merges.txt",              repoID: repo, bytes:     1_600_000),
+                ManifestEntry(path: "lm/lm_added_tokens.json",       repoID: repo, bytes:     2_100_000),
+                ManifestEntry(path: "lm/lm_special_tokens_map.json", repoID: repo, bytes:     1_700_000),
+                ManifestEntry(path: "lm/lm_chat_template.jinja",     repoID: repo, bytes:         4_100),
+                ManifestEntry(path: "lm/lm_config.json",             repoID: repo, bytes:         1_400),
+            ]
+        case .sft:
+            let repo = "Team-AER/ace-step-v1.5-sft-mlx"
+            return [
+                ManifestEntry(path: "dit/dit_weights.safetensors",   repoID: repo, bytes: 4_790_000_000),
+                ManifestEntry(path: "dit/silence_latent.safetensors", repoID: repo, bytes:     1_920_000),
+            ]
+        case .base:
+            let repo = "Team-AER/ace-step-v1.5-base-mlx"
+            return [
+                ManifestEntry(path: "dit/dit_weights.safetensors",   repoID: repo, bytes: 4_790_000_000),
+                ManifestEntry(path: "dit/silence_latent.safetensors", repoID: repo, bytes:     1_920_000),
+            ]
+        default:
+            return []  // XL variants require tools/convert_weights.py
+        }
+    }
+
+    static func estimatedBytes(for variant: DiTVariant) -> Int64 {
+        manifest(for: variant).reduce(0) { $0 + $1.bytes }
+    }
+
+    // MARK: - Download
+
+    /// Downloads a variant's weights. For non-turbo variants, also creates symlinks
+    /// to the turbo directory so lm/, vae/, and text/ are shared.
+    func download(
+        variant: DiTVariant,
         to directory: URL,
+        turboDirectory: URL,
         onProgress: @escaping @Sendable (Double) -> Void
     ) async throws {
+        let entries = Self.manifest(for: variant)
+        guard !entries.isEmpty else {
+            throw ModelDownloadError.scriptRequired(variant)
+        }
+
+        let totalBytes = entries.reduce(Int64(0)) { $0 + $1.bytes }
         var doneSoFar: Int64 = 0
 
-        for (path, size) in Self.manifest {
-            let destination = directory.appendingPathComponent(path)
+        for entry in entries {
+            let destination = directory.appendingPathComponent(entry.path)
 
             if FileManager.default.fileExists(atPath: destination.path) {
-                doneSoFar += size
-                onProgress(Double(doneSoFar) / Double(Self.totalBytes))
+                doneSoFar += entry.bytes
+                onProgress(Double(doneSoFar) / Double(totalBytes))
                 continue
             }
 
@@ -56,21 +93,44 @@ actor ModelDownloader {
                 withIntermediateDirectories: true
             )
 
-            let remoteURL  = URL(string: Self.baseURL + path)!
-            let baseBytes  = doneSoFar
+            let urlString = "\(Self.hfBase)/\(entry.repoID)/resolve/main/\(entry.path)"
+            guard let remoteURL = URL(string: urlString) else { continue }
+            let baseBytes = doneSoFar
 
             try await downloadFile(from: remoteURL, to: destination) { fileFraction in
-                let total = baseBytes + Int64(Double(size) * fileFraction)
-                onProgress(Double(total) / Double(Self.totalBytes))
+                let total = baseBytes + Int64(Double(entry.bytes) * fileFraction)
+                onProgress(Double(total) / Double(totalBytes))
             }
 
-            doneSoFar += size
+            doneSoFar += entry.bytes
+        }
+
+        if variant != .turbo {
+            try createSymlinks(in: directory, linkedTo: turboDirectory)
         }
 
         onProgress(1.0)
     }
 
+    /// Shorthand for downloading the turbo variant (used by SetupView).
+    func downloadAll(
+        to directory: URL,
+        onProgress: @escaping @Sendable (Double) -> Void
+    ) async throws {
+        try await download(variant: .turbo, to: directory, turboDirectory: directory, onProgress: onProgress)
+    }
+
     // MARK: - Private
+
+    private func createSymlinks(in variantDir: URL, linkedTo turboDir: URL) throws {
+        let fm = FileManager.default
+        let turboName = turboDir.lastPathComponent
+        for sharedDir in ["lm", "vae", "text"] {
+            let link = variantDir.appendingPathComponent(sharedDir)
+            if fm.fileExists(atPath: link.path) { continue }
+            try fm.createSymbolicLink(atPath: link.path, withDestinationPath: "../\(turboName)/\(sharedDir)")
+        }
+    }
 
     private func downloadFile(
         from url: URL,
@@ -89,6 +149,19 @@ actor ModelDownloader {
                 delegateQueue: nil
             )
             session.downloadTask(with: url).resume()
+        }
+    }
+}
+
+// MARK: - Errors
+
+enum ModelDownloadError: LocalizedError {
+    case scriptRequired(DiTVariant)
+
+    var errorDescription: String? {
+        switch self {
+        case .scriptRequired(let v):
+            return "\(v.displayName) requires script conversion. Run: python tools/convert_weights.py --variant \(v.rawValue)"
         }
     }
 }
@@ -129,7 +202,6 @@ private final class DownloadHandler: NSObject, URLSessionDownloadDelegate, @unch
         didFinishDownloadingTo location: URL
     ) {
         do {
-            // The temp file is deleted after this delegate returns, so move it first.
             if FileManager.default.fileExists(atPath: destination.path) {
                 try FileManager.default.removeItem(at: destination)
             }

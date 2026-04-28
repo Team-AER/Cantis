@@ -59,8 +59,9 @@ final class NativeInferenceEngineTests: XCTestCase {
 
     func testMlxModelDirectoryIsInsideAppSupport() {
         let engine = NativeInferenceEngine()
-        XCTAssertTrue(engine.mlxModelDirectory.path.contains("Auralux"))
-        XCTAssertTrue(engine.mlxModelDirectory.lastPathComponent == "ace-step-v1.5-mlx")
+        let modelDirectory = engine.mlxModelDirectory(for: .turbo)
+        XCTAssertTrue(modelDirectory.path.contains("Auralux"))
+        XCTAssertTrue(modelDirectory.lastPathComponent == "ace-step-v1.5-mlx")
     }
 
     // MARK: - Cancellation

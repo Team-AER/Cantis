@@ -8,6 +8,7 @@ struct GenerationView: View {
     @State private var tagText = ""
     @State private var completionDismissTask: Task<Void, Never>?
     @State private var didSeedDefaults = false
+    @State private var downloadSheetVariant: DiTVariant? = nil
 
     private var engineReady: Bool {
         engine.modelState.isReady
@@ -115,76 +116,102 @@ struct GenerationView: View {
             viewModel.applyDefaults(from: settings)
             didSeedDefaults = true
         }
+        .sheet(item: $downloadSheetVariant) { variant in
+            ModelDownloadSheet(variant: variant)
+                .environment(engine)
+        }
     }
+
+    // MARK: - Model status banner
 
     @ViewBuilder
     private var modelBanner: some View {
-        HStack(spacing: 12) {
-            Image(systemName: bannerIcon)
-                .foregroundStyle(bannerColor)
+        switch engine.modelState {
+        case .notDownloaded:
+            notDownloadedBanner
 
-            VStack(alignment: .leading, spacing: 2) {
-                Text(bannerTitle)
+        case .downloading(let progress):
+            HStack(spacing: 12) {
+                ProgressView().controlSize(.small)
+                VStack(alignment: .leading, spacing: 3) {
+                    Text("Downloading model weights…")
+                        .font(.callout.bold())
+                    ProgressView(value: progress)
+                        .progressViewStyle(.linear)
+                        .frame(maxWidth: 240)
+                }
+                Spacer()
+                Text("\(Int(progress * 100))%")
+                    .font(.caption.monospacedDigit())
+                    .foregroundStyle(.secondary)
+            }
+            .padding(14)
+            .background(.blue.opacity(0.08), in: RoundedRectangle(cornerRadius: 10))
+
+        case .loading:
+            HStack(spacing: 12) {
+                ProgressView().controlSize(.small)
+                Text("Loading model into memory…")
+                    .font(.callout)
+                    .foregroundStyle(.secondary)
+                Spacer()
+            }
+            .padding(14)
+            .background(.orange.opacity(0.08), in: RoundedRectangle(cornerRadius: 10))
+
+        case .error(let message):
+            HStack(spacing: 12) {
+                Image(systemName: "exclamationmark.triangle.fill")
+                    .foregroundStyle(.red)
+                VStack(alignment: .leading, spacing: 2) {
+                    Text("Model failed to load")
+                        .font(.callout.bold())
+                    Text(message)
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                        .lineLimit(2)
+                }
+                Spacer()
+                Button("Retry") {
+                    Task { await engine.loadModels() }
+                }
+                .controlSize(.small)
+            }
+            .padding(14)
+            .background(.red.opacity(0.08), in: RoundedRectangle(cornerRadius: 10))
+
+        case .ready:
+            EmptyView()
+        }
+    }
+
+    private var notDownloadedBanner: some View {
+        HStack(spacing: 14) {
+            Image(systemName: "arrow.down.circle.fill")
+                .font(.title2)
+                .foregroundStyle(.tint)
+
+            VStack(alignment: .leading, spacing: 3) {
+                Text("No model downloaded")
                     .font(.callout.bold())
-                Text(bannerMessage)
+                Text("Download \(settings.ditVariant.displayName) to start generating.")
                     .font(.caption)
                     .foregroundStyle(.secondary)
             }
 
             Spacer()
 
-            if engine.modelState.isLoading {
-                ProgressView()
-                    .controlSize(.small)
-            } else if case .error = engine.modelState {
-                Button("Retry") {
-                    Task { await engine.loadModels() }
-                }
-                .controlSize(.small)
+            Button("Download") {
+                downloadSheetVariant = settings.ditVariant
             }
+            .buttonStyle(.borderedProminent)
+            .controlSize(.small)
         }
-        .padding(12)
-        .background(.orange.opacity(0.1), in: RoundedRectangle(cornerRadius: 8))
-    }
-
-    private var bannerIcon: String {
-        switch engine.modelState {
-        case .error: return "exclamationmark.triangle.fill"
-        case .loading: return "arrow.triangle.2.circlepath"
-        default: return "info.circle"
-        }
-    }
-
-    private var bannerColor: Color {
-        switch engine.modelState {
-        case .error: return .red
-        case .loading: return .orange
-        default: return .yellow
-        }
-    }
-
-    private var bannerTitle: String {
-        switch engine.modelState {
-        case .notDownloaded:            return "Models Not Downloaded"
-        case .downloading:              return "Downloading Models…"
-        case .loading:                  return "Loading Models…"
-        case .error:                    return "Model Load Error"
-        case .ready:                    return "Ready"
-        }
-    }
-
-    private var bannerMessage: String {
-        switch engine.modelState {
-        case .notDownloaded:
-            return "Open setup to download model weights automatically."
-        case .downloading(let progress):
-            return "Downloading model weights: \(Int(progress * 100))% complete."
-        case .loading:
-            return "Loading model weights into memory. This may take a moment."
-        case .error(let message):
-            return message
-        case .ready:
-            return ""
-        }
+        .padding(14)
+        .background(.tint.opacity(0.07), in: RoundedRectangle(cornerRadius: 10))
+        .overlay(
+            RoundedRectangle(cornerRadius: 10)
+                .stroke(.tint.opacity(0.2), lineWidth: 1)
+        )
     }
 }

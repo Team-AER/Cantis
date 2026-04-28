@@ -2,6 +2,9 @@ import SwiftUI
 
 struct ModelSettingsView: View {
     @Environment(NativeInferenceEngine.self) private var engine
+    @Environment(SettingsViewModel.self) private var settings
+
+    @State private var downloadSheetVariant: DiTVariant? = nil
 
     private var isLowMemoryMac: Bool {
         ProcessInfo.processInfo.physicalMemory <= 17_179_869_184
@@ -12,21 +15,25 @@ struct ModelSettingsView: View {
             Text("Models")
                 .font(.headline)
 
-            modelStateSection
-            modelListSection
-            footerSection
+            loadedModelStatus
+            variantList
+            pathFooter
+        }
+        .sheet(item: $downloadSheetVariant) { variant in
+            ModelDownloadSheet(variant: variant)
+                .environment(engine)
         }
     }
 
-    // MARK: - Model State Section
+    // MARK: - Loaded model status
 
     @ViewBuilder
-    private var modelStateSection: some View {
+    private var loadedModelStatus: some View {
         HStack(alignment: .top, spacing: 8) {
             Circle()
                 .fill(statusColor)
                 .frame(width: 8, height: 8)
-                .padding(.top, 3)
+                .padding(.top, 4)
 
             VStack(alignment: .leading, spacing: 4) {
                 Text(statusTitle)
@@ -34,14 +41,14 @@ struct ModelSettingsView: View {
 
                 switch engine.modelState {
                 case .notDownloaded:
-                    Text("Open setup to download model weights automatically (~5.4 GB).")
+                    Text("Select a model below and click Download.")
                         .font(.caption)
                         .foregroundStyle(.secondary)
                 case .downloading(let progress):
                     VStack(alignment: .leading, spacing: 4) {
                         ProgressView(value: progress)
                             .progressViewStyle(.linear)
-                        Text("Downloading \(Int(progress * 100))% — ~5.4 GB total")
+                        Text("Downloading \(Int(progress * 100))%")
                             .font(.caption2)
                             .foregroundStyle(.secondary)
                     }
@@ -53,7 +60,7 @@ struct ModelSettingsView: View {
                 case .loading:
                     HStack(spacing: 6) {
                         ProgressView().controlSize(.small)
-                        Text("Loading...")
+                        Text("Loading weights into memory…")
                             .font(.caption)
                             .foregroundStyle(.secondary)
                     }
@@ -73,11 +80,11 @@ struct ModelSettingsView: View {
 
     private var statusColor: Color {
         switch engine.modelState {
-        case .ready:        return .green
-        case .loading:      return .orange
-        case .downloading:  return .blue
+        case .ready:         return .green
+        case .loading:       return .orange
+        case .downloading:   return .blue
         case .notDownloaded: return .gray
-        case .error:        return .red
+        case .error:         return .red
         }
     }
 
@@ -85,21 +92,20 @@ struct ModelSettingsView: View {
         switch engine.modelState {
         case .ready:                    return "Models loaded — ready to generate"
         case .loading:                  return "Loading model weights…"
-        case .downloading(let p):       return "Downloading model weights (\(Int(p * 100))%)"
-        case .notDownloaded:            return "Weights not found"
+        case .downloading(let p):       return "Downloading (\(Int(p * 100))%)"
+        case .notDownloaded:            return "No model loaded"
         case .error:                    return "Failed to load models"
         }
     }
 
-    // MARK: - Model List
+    // MARK: - Variant list
 
-    @ViewBuilder
-    private var modelListSection: some View {
+    private var variantList: some View {
         VStack(spacing: 0) {
-            let artifacts = ModelManagerService.mlxArtifacts
-            ForEach(artifacts) { artifact in
-                modelRow(artifact)
-                if artifact.id != artifacts.last?.id {
+            let variants = DiTVariant.allCases.filter(\.isAvailable)
+            ForEach(variants) { variant in
+                variantRow(variant)
+                if variant.id != variants.last?.id {
                     Divider()
                 }
             }
@@ -108,56 +114,129 @@ struct ModelSettingsView: View {
     }
 
     @ViewBuilder
-    private func modelRow(_ artifact: ModelArtifact) -> some View {
-        HStack {
-            VStack(alignment: .leading, spacing: 4) {
-                Text(artifact.name)
-                    .font(.body.weight(.medium))
-                Text(artifact.description)
+    private func variantRow(_ variant: DiTVariant) -> some View {
+        let downloaded = engine.isDownloaded(variant)
+        let isDownloading = engine.activeDownloadVariant == variant
+        let isActive = settings.ditVariant == variant && engine.modelState.isReady
+
+        HStack(spacing: 12) {
+            // Status dot
+            Circle()
+                .fill(rowDotColor(variant: variant, downloaded: downloaded,
+                                  downloading: isDownloading, active: isActive))
+                .frame(width: 7, height: 7)
+
+            // Name + description
+            VStack(alignment: .leading, spacing: 3) {
+                HStack(spacing: 6) {
+                    Text(variant.displayName)
+                        .font(.body.weight(.medium))
+                    if isActive {
+                        Text("In Use")
+                            .font(.caption2.weight(.semibold))
+                            .padding(.horizontal, 5)
+                            .padding(.vertical, 2)
+                            .background(.green.opacity(0.15), in: Capsule())
+                            .foregroundStyle(.green)
+                    }
+                }
+                Text(rowSubtitle(variant: variant, downloaded: downloaded, downloading: isDownloading))
                     .font(.caption)
                     .foregroundStyle(.secondary)
-                    .lineLimit(2)
+                    .lineLimit(1)
             }
 
             Spacer()
 
-            Text(String(format: "~%.1f GB", artifact.estimatedSizeGB))
-                .font(.caption)
-                .foregroundStyle(.tertiary)
+            // Size + action button
+            if isDownloading {
+                downloadingIndicator(variant: variant)
+            } else if downloaded {
+                Text(formattedSize(bytes: ModelDownloader.estimatedBytes(for: variant)))
+                    .font(.caption)
+                    .foregroundStyle(.tertiary)
+            } else {
+                downloadButton(variant: variant)
+            }
         }
         .padding(.horizontal, 12)
         .padding(.vertical, 10)
+        .contentShape(Rectangle())
     }
 
-    // MARK: - Actions
+    private func rowDotColor(variant: DiTVariant, downloaded: Bool, downloading: Bool, active: Bool) -> Color {
+        if active       { return .green }
+        if downloading  { return .blue }
+        if downloaded   { return .green.opacity(0.5) }
+        return .gray.opacity(0.4)
+    }
+
+    private func rowSubtitle(variant: DiTVariant, downloaded: Bool, downloading: Bool) -> String {
+        if downloading {
+            return "Downloading \(Int(engine.downloadProgress * 100))%…"
+        }
+        if downloaded {
+            return "Downloaded — \(formattedSize(bytes: ModelDownloader.estimatedBytes(for: variant)))"
+        }
+        if !variant.canDownloadInApp {
+            return "Requires conversion script"
+        }
+        if variant.requiresTurboBase && !engine.isDownloaded(.turbo) {
+            return "Requires Turbo base first — \(formattedSize(bytes: ModelDownloader.estimatedBytes(for: variant)))"
+        }
+        return "Not downloaded — \(formattedSize(bytes: ModelDownloader.estimatedBytes(for: variant)))"
+    }
 
     @ViewBuilder
-    private var footerSection: some View {
-        HStack {
-            switch engine.modelState {
-            case .error:
+    private func downloadingIndicator(variant: DiTVariant) -> some View {
+        HStack(spacing: 6) {
+            ProgressView().controlSize(.mini)
+            Text("\(Int(engine.downloadProgress * 100))%")
+                .font(.caption2.monospacedDigit())
+                .foregroundStyle(.secondary)
+        }
+    }
+
+    @ViewBuilder
+    private func downloadButton(variant: DiTVariant) -> some View {
+        Button {
+            downloadSheetVariant = variant
+        } label: {
+            Image(systemName: "arrow.down.circle")
+                .font(.body)
+        }
+        .buttonStyle(.plain)
+        .foregroundStyle(.tint)
+        .help(variant.canDownloadInApp ? "Download \(variant.displayName)" : "Requires conversion script")
+    }
+
+    // MARK: - Footer
+
+    @ViewBuilder
+    private var pathFooter: some View {
+        if case .error = engine.modelState {
+            HStack {
                 Button("Retry Load") {
                     Task { await engine.loadModels() }
                 }
                 .buttonStyle(.borderedProminent)
                 .controlSize(.small)
-            case .notDownloaded:
-                Text("python tools/convert_weights.py")
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
-                    .textSelection(.enabled)
-                    .padding(.horizontal, 8)
-                    .padding(.vertical, 4)
-                    .background(.quaternary.opacity(0.5), in: RoundedRectangle(cornerRadius: 4))
-            default:
-                EmptyView()
+                Spacer()
             }
-            Spacer()
         }
 
-        Text("Weights stored in ~/Library/Application Support/Auralux/Models/ace-step-v1.5-mlx/")
+        Text("~/Library/Application Support/Auralux/Models/")
             .font(.caption2)
             .foregroundStyle(.tertiary)
             .textSelection(.enabled)
+            .frame(maxWidth: .infinity, alignment: .leading)
+    }
+
+    // MARK: - Helpers
+
+    private func formattedSize(bytes: Int64) -> String {
+        guard bytes > 0 else { return "—" }
+        let gb = Double(bytes) / 1_000_000_000
+        return String(format: "~%.1f GB", gb)
     }
 }
