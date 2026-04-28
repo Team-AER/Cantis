@@ -170,13 +170,43 @@ final class DCHiFiGANDecoder: Module, AudioVAEDecoder, @unchecked Sendable {
         super.init()
     }
 
+    // Latent frames per decode chunk (~2 s of audio) and border overlap.
+    // Without chunking, the last Oobleck block materialises [B, T*1920, 128]
+    // which exceeds 1 GB for clips longer than ~30 s.
+    private static let kChunkFrames   = 50
+    private static let kOverlapFrames = 16
+
     /// - latent: [B, T, 64] acoustic latent at 25 Hz
     /// - Returns: [B, T × 1920, 2] stereo PCM at 48 kHz
     func decode(latent: MLXArray) -> MLXArray {
+        let T = latent.shape[1]
+        guard T > DCHiFiGANDecoder.kChunkFrames else {
+            return decodeSlice(latent)
+        }
+        var chunks: [MLXArray] = []
+        var start = 0
+        while start < T {
+            let end      = min(start + DCHiFiGANDecoder.kChunkFrames, T)
+            let padLeft  = min(start, DCHiFiGANDecoder.kOverlapFrames)
+            let padRight = min(T - end, DCHiFiGANDecoder.kOverlapFrames)
+            var audio    = decodeSlice(latent[0..., (start - padLeft)..<(end + padRight), 0...])
+            let aLen     = audio.shape[1]
+            let trimL    = padLeft  * 1920
+            let trimR    = padRight * 1920
+            audio = audio[0..., trimL..<(aLen - trimR), 0...]
+            eval(audio)
+            MLX.Memory.clearCache()
+            chunks.append(audio)
+            start = end
+        }
+        return concatenated(chunks, axis: 1)
+    }
+
+    private func decodeSlice(_ latent: MLXArray) -> MLXArray {
         var x = latent.asType(.float32)
         x = conv1(x)
         for block in blocks { x = block(x) }
-        return conv2(snake1(x)) // [B, T×1920, 2] stereo
+        return conv2(snake1(x))
     }
 }
 
@@ -217,6 +247,9 @@ final class DCHiFiGANEncoder: Module, @unchecked Sendable {
         super.init()
     }
 
+    private static let kChunkFrames   = 50
+    private static let kOverlapFrames = 16
+
     /// Encode 48 kHz stereo audio into the 25 Hz acoustic latent.
     ///
     /// - audio: `[B, T_audio, 2]` float32 in [-1, 1]. Length must be a multiple
@@ -224,11 +257,33 @@ final class DCHiFiGANEncoder: Module, @unchecked Sendable {
     /// - Returns: `[B, T_audio / 1920, 64]` — the *mean* of the diagonal
     ///   Gaussian. Use this directly as the DiT acoustic latent.
     func encode(audio: MLXArray) -> MLXArray {
+        let T = audio.shape[1] / 1920
+        guard T > DCHiFiGANEncoder.kChunkFrames else {
+            return encodeSlice(audio)
+        }
+        var chunks: [MLXArray] = []
+        var start = 0
+        while start < T {
+            let end      = min(start + DCHiFiGANEncoder.kChunkFrames, T)
+            let padLeft  = min(start, DCHiFiGANEncoder.kOverlapFrames)
+            let padRight = min(T - end, DCHiFiGANEncoder.kOverlapFrames)
+            var lat      = encodeSlice(audio[0..., (start - padLeft) * 1920..<(end + padRight) * 1920, 0...])
+            let latLen   = lat.shape[1]
+            lat = lat[0..., padLeft..<(latLen - padRight), 0...]
+            eval(lat)
+            MLX.Memory.clearCache()
+            chunks.append(lat)
+            start = end
+        }
+        return concatenated(chunks, axis: 1)
+    }
+
+    private func encodeSlice(_ audio: MLXArray) -> MLXArray {
         var x = audio.asType(.float32)
         x = conv1(x)
         for block in blocks { x = block(x) }
-        x = conv2(snake1(x))                  // [B, T_lat, 128]
-        return x[0..., 0..., 0..<64]          // mode = mean (first half of channels)
+        x = conv2(snake1(x))
+        return x[0..., 0..., 0..<64]
     }
 }
 
