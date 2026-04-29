@@ -11,26 +11,18 @@ Thanks for contributing.
 
 ## Development Setup
 
-1. Install Xcode 16+ (or Swift 6.0+) and ensure Python 3.11+ is available.
+1. Install Xcode 26+ (or Swift 6.2+ toolchain). Python 3.11+ is only needed if you intend to convert XL or custom weights via `tools/convert_weights.py`.
 2. Clone the repository.
-3. Set up the Python environment:
-   ```bash
-   cd AuraluxEngine
-   ./setup_env.sh
-   ```
-4. Start the local API server (optional — the app manages this automatically):
-   ```bash
-   cd AuraluxEngine
-   ./start_api_server_macos.sh
-   ```
-5. Build and run:
+3. Build and run:
    ```bash
    swift run Auralux
    ```
-6. Run tests:
+   On first launch the in-app onboarding overlay downloads the active DiT variant's weights from HuggingFace into `~/Library/Application Support/Auralux/Models/`.
+4. Run tests:
    ```bash
    swift test
    ```
+   In CI, MLX integration suites are skipped (they require local Metal / GPU); they should be run from Xcode when touching `Auralux/Inference/`.
 
 See [docs/DEVELOPMENT.md](docs/DEVELOPMENT.md) for the full development guide, troubleshooting, and project structure.
 
@@ -43,8 +35,9 @@ See [docs/DEVELOPMENT.md](docs/DEVELOPMENT.md) for the full development guide, t
 ## Pull Request Checklist
 
 - [ ] Tests added/updated for changed behavior.
-- [ ] `swift test` passes.
-- [ ] `python3 -m py_compile AuraluxEngine/server.py` passes (if server was modified).
+- [ ] `swift build` and the CI-safe `swift test` slice pass (`--skip 'ACEStepDiTTests|ACEStepLMTests|FeasibilityProbeTests|Qwen3ConditioningTests|Qwen3RealWeightsTests'`).
+- [ ] If `Auralux/Inference/` was touched, MLX integration suites pass locally in Xcode against real weights.
+- [ ] `python3 -m py_compile modeling_acestep_v15_turbo.py tools/convert_weights.py` passes (if the converter or reference model was modified).
 - [ ] Docs updated for user-visible changes.
 - [ ] No secrets, credentials, or personal paths are introduced.
 

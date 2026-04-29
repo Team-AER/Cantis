@@ -407,7 +407,7 @@ final class NativeInferenceEngine {
                                 numSteps: request.numSteps,
                                 shift:    request.scheduleShift
                             )
-                            result = sampler.sample(
+                            result = try sampler.sample(
                                 noise:                noise,
                                 contextLatents:       contextLatents,
                                 encoderHiddenStates:  encH,
@@ -434,7 +434,7 @@ final class NativeInferenceEngine {
                                 shift:    request.scheduleShift,
                                 cfgScale: Float(request.cfgScale)
                             )
-                            result = sampler.sample(
+                            result = try sampler.sample(
                                 noise:                noise,
                                 contextLatents:       contextLatents,
                                 encoderHiddenStates:  encH,

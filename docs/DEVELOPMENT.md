@@ -2,24 +2,11 @@
 
 ## Prerequisites
 
-- macOS 15+ (Sequoia)
-- Xcode 16+ or Swift 6+ toolchain
+- macOS 26+ (Tahoe)
+- Xcode 26+ (or Swift 6.2 toolchain) — SDK requires the macOS 26 SDK
 - Apple Silicon (M1 or later)
-- Python 3.11+ (installed automatically by the setup script)
-- Internet connection for initial setup
-
-## First-Time Setup
-
-The app handles setup automatically on first launch via the onboarding flow. For manual development setup:
-
-```bash
-git clone <repo-url>
-cd auralux
-
-# Set up the Python environment (clones ACE-Step 1.5, installs deps via uv)
-cd AuraluxEngine
-./setup_env.sh
-```
+- Internet connection (for the first-launch model download)
+- Python 3.11+ — only required if you intend to run `tools/convert_weights.py` to convert XL or custom weights
 
 ## Running the App
 
@@ -27,26 +14,29 @@ cd AuraluxEngine
 
 Open `Package.swift` in Xcode, select the `Auralux` executable target, and run (Cmd+R).
 
-### From Terminal
+### From the terminal
 
 ```bash
 swift run Auralux
 ```
 
-The app will automatically detect the AuraluxEngine directory and manage the server lifecycle. On first launch, the onboarding flow guides through environment setup and server start.
+On first launch the in-app onboarding overlay (`SetupView`) will:
 
-## Running the Engine Server Manually
+1. Check whether the active `DiTVariant` is already present in `~/Library/Application Support/Auralux/Models/`.
+2. If not, download the variant's manifest from HuggingFace via `ModelDownloader` (sequential, resumable, weighted progress).
+3. Load weights into MLX on a detached task and transition `modelState` → `ready`.
 
-If you prefer to manage the server separately (useful for debugging):
+After that, generation runs locally in the same process — there is no server, no port, no subprocess.
+
+## Converting XL or Custom Weights
+
+The Turbo, SFT, and Base variants are pre-converted and download from HuggingFace directly. The XL variants and any custom checkpoints require a one-shot conversion from the original PyTorch weights:
 
 ```bash
-cd AuraluxEngine
-./start_api_server_macos.sh
+python tools/convert_weights.py --variant xl-turbo
 ```
 
-By default the server binds to `127.0.0.1:8765`. Override with `AURALUX_SERVER_PORT`.
-
-The app detects externally running servers and connects to them automatically, skipping subprocess management.
+Output is written into `~/Library/Application Support/Auralux/Models/<variant-directory>/`. See `tools/convert_weights.py` for flags and `modeling_acestep_v15_turbo.py` for the reference PyTorch model used by the converter.
 
 ## Running Tests
 
@@ -54,149 +44,179 @@ The app detects externally running servers and connects to them automatically, s
 swift test
 ```
 
-Tests cover:
-- **ModelTests** — SwiftData model creation, mutations, and validation
-- **ServiceTests** — service layer behavior and error handling
+CI runs the deterministic suites and skips MLX integration tests, which require a local Metal / GPU runtime:
+
+```
+swift test --skip 'ACEStepDiTTests|ACEStepLMTests|FeasibilityProbeTests|Qwen3ConditioningTests|Qwen3RealWeightsTests'
+```
+
+Suites:
+
+- **ModelTests** — SwiftData model creation, mutations, validation
+- **ServiceTests** — service-layer behavior and error handling
 - **ViewModelTests** — state transitions, preset application, settings persistence
+- **ACEStepDiTTests / ACEStepLMTests / FeasibilityProbeTests / Qwen3ConditioningTests / Qwen3RealWeightsTests** — MLX integration (Xcode-only)
 
-## Environment Variables
+## Settings and User Defaults
 
-| Variable | Default | Description |
-|----------|---------|-------------|
-| `AURALUX_SERVER_PORT` | `8765` | Port for the inference server |
-| `ACESTEP_LM_BACKEND` | `mlx` | LM backend (`mlx` for Apple Silicon) |
-| `ACESTEP_CONFIG_PATH` | `acestep-v15-turbo` | DiT model configuration |
-| `ACESTEP_LM_MODEL_PATH` | `acestep-5Hz-lm-0.6B` | LM model name |
-| `ACESTEP_DEVICE` | `auto` | Inference device (auto/mps/cpu) |
-| `ACESTEP_INIT_LLM` | `auto` | Whether to initialize the LLM |
-| `ACESTEP_OFFLOAD_TO_CPU` | `false` | Offload models to CPU when idle |
+Most knobs surface via `SettingsViewModel` and persist in `UserDefaults` under `SettingsViewModel.Keys.*`:
+
+| Setting | Key | Notes |
+|---------|-----|-------|
+| Active DiT variant | `settings.ditVariant` | `turbo` / `sft` / `base` / `xl-*` |
+| Default generation mode | `settings.defaultMode` | `text2music` etc. |
+| Default num steps | `settings.defaultNumSteps` | Clamped to `DiTVariant.maxNumSteps` |
+| Default schedule shift | `settings.defaultScheduleShift` | One of {1.0, 2.0, 3.0} |
+| Default CFG scale | `settings.defaultCfgScale` | Ignored by CFG-distilled variants |
+| Load 5 Hz LM | `settings.useLM` | Off by default; ~1.2 GB resident |
+| Quantization mode | `settings.quantizationMode` | Currently `fp16` only |
+| Low-memory mode | `settings.lowMemoryMode` | Halves `MLX.Memory.cacheLimit` |
+
+There are no environment variables for runtime configuration — everything is in-app settings or UserDefaults.
 
 ## Project Structure
 
 ```
 Auralux/
-├── AuraluxApp.swift                    # App entry point, service injection, AppDelegate
-├── ContentView.swift                   # Root view with setup/main switching
-├── Info.plist                          # App metadata
-├── Entitlements.plist                  # macOS entitlements
+├── AuraluxApp.swift                     # App entry point, MLX cache, ModelContainer, env injection
+├── Info.plist                           # App metadata
+├── Entitlements.plist                   # App Sandbox + network/files/audio entitlements
 │
-├── Components/                         # Reusable UI components
-│   ├── AudioDropZone.swift             # Drag-and-drop audio import zone
-│   ├── EngineStatusView.swift          # Engine status badge (red/yellow/green)
-│   ├── ProgressOverlay.swift           # Progress indicator overlay
-│   ├── SliderControl.swift             # Custom parameter slider
-│   └── TagChip.swift                   # Tag display component
+├── Components/                          # Reusable UI components
+│   ├── AudioDropZone.swift
+│   ├── EngineStatusView.swift
+│   ├── ProgressOverlay.swift
+│   ├── SliderControl.swift
+│   └── TagChip.swift
 │
-├── Models/                             # SwiftData domain models
-│   ├── GeneratedTrack.swift            # Generated music metadata + file path
-│   ├── GenerationParameters.swift      # Generation request parameters (Codable)
-│   ├── Preset.swift                    # Saved generation configurations
-│   └── Tag.swift                       # Reusable tag model
+├── Inference/                           # Native Swift inference (mlx-swift)
+│   ├── NativeInferenceEngine.swift      # @MainActor coordinator
+│   ├── DiT/
+│   │   ├── ACEStepDiT.swift
+│   │   ├── DiTWeightLoader.swift
+│   │   ├── TurboSampler.swift           # 8-step CFG-distilled sampler
+│   │   ├── CFGSampler.swift             # Twin-pass CFG sampler (base/SFT)
+│   │   ├── AudioVAE.swift               # DC-HiFi-GAN VAE
+│   │   ├── VAEWeightLoader.swift
+│   │   ├── AceStepAudioTokenizer.swift  # FSQ audio token codec
+│   │   ├── AudioFileLoader.swift        # cover/repaint/extract source loading
+│   │   └── SilenceLatentLoader.swift
+│   ├── LM/                              # Optional 5 Hz audio-token LM
+│   │   ├── ACEStepLM.swift
+│   │   ├── ACEStepLMSampler.swift
+│   │   ├── BPETokenizer.swift
+│   │   └── LMWeightLoader.swift
+│   └── Text/                            # Qwen3 text conditioning encoder
+│       ├── Qwen3Encoder.swift
+│       ├── Qwen3EncoderWeightLoader.swift
+│       ├── Qwen3Tokenizer.swift
+│       └── PackSequences.swift
 │
-├── Services/                           # Business logic layer
-│   ├── AudioExportService.swift        # Multi-format export (WAV/FLAC/MP3/AAC/ALAC)
-│   ├── AudioPlayerService.swift        # AVAudioEngine playback wrapper
-│   ├── EngineService.swift             # Engine lifecycle management (~456 lines)
-│   ├── GenerationQueueService.swift    # Job queue with priority ordering
-│   ├── HistoryService.swift            # SwiftData CRUD for generation history
-│   ├── InferenceService.swift          # HTTP client to Python server (actor, ~304 lines)
-│   ├── ModelManagerService.swift       # Model download status tracking
-│   └── PresetService.swift             # Preset CRUD operations
+├── Models/                              # SwiftData models + DTOs + enums
+│   ├── DiTVariant.swift
+│   ├── GeneratedTrack.swift
+│   ├── GenerationMode.swift
+│   ├── GenerationParameters.swift
+│   ├── Preset.swift
+│   └── Tag.swift
 │
-├── Utilities/                          # Helpers and constants
-│   ├── AppLogger.swift                 # Centralized logging (OSLog wrapper)
-│   ├── AudioFFT.swift                  # vDSP FFT for spectrum visualization
-│   ├── Constants.swift                 # App-wide constants
-│   └── FileUtilities.swift             # File path helpers
+├── Services/                            # Business logic
+│   ├── AudioExportService.swift
+│   ├── AudioPlayerService.swift
+│   ├── GenerationQueueService.swift
+│   ├── HistoryService.swift
+│   ├── ModelDownloader.swift            # actor; HuggingFace sequential downloads
+│   ├── ModelManagerService.swift        # MLX artifact registry
+│   ├── PlaybackDiagnosticsService.swift
+│   └── PresetService.swift
 │
-├── ViewModels/                         # @Observable state management
-│   ├── GenerationViewModel.swift       # Generation orchestration and state
-│   ├── HistoryViewModel.swift          # History browsing state
-│   ├── PlayerViewModel.swift           # Audio playback state
-│   ├── SettingsViewModel.swift         # Settings persistence
-│   └── SidebarViewModel.swift          # Navigation state
+├── Utilities/                           # Helpers
+│   ├── AppLogger.swift
+│   ├── AudioFFT.swift
+│   ├── Constants.swift
+│   └── FileUtilities.swift
+│
+├── ViewModels/                          # @Observable state
+│   ├── GenerationViewModel.swift
+│   ├── HistoryViewModel.swift
+│   ├── PlayerViewModel.swift
+│   ├── SettingsViewModel.swift
+│   └── SidebarViewModel.swift
 │
 ├── Views/
+│   ├── ContentView.swift                # Root: bootstraps services, overlays SetupView
+│   ├── LogViewerView.swift
 │   ├── AudioToAudio/
-│   │   ├── AudioImportView.swift       # Audio file import interface
-│   │   └── LoRAManagerView.swift       # LoRA model management
+│   │   ├── AudioImportView.swift
+│   │   └── LoRAManagerView.swift
 │   ├── Generation/
-│   │   ├── GenerationView.swift        # Main generation interface
-│   │   ├── LyricEditorView.swift       # Lyric editing with structure tags
-│   │   ├── ParameterControlsView.swift # Duration, variance, seed controls
-│   │   └── TagEditorView.swift         # Tag selection and management
+│   │   ├── GenerationView.swift
+│   │   ├── LyricEditorView.swift
+│   │   ├── ParameterControlsView.swift
+│   │   └── TagEditorView.swift
 │   ├── History/
-│   │   ├── HistoryBrowserView.swift    # Generation history browser
-│   │   └── HistoryItemView.swift       # Individual history entry display
+│   │   ├── HistoryBrowserView.swift
+│   │   └── HistoryItemView.swift
 │   ├── Onboarding/
-│   │   └── SetupView.swift             # First-run setup experience
+│   │   └── SetupView.swift
 │   ├── Player/
-│   │   ├── PlayerView.swift            # Audio playback interface
-│   │   ├── SpectrumAnalyzerView.swift  # Real-time FFT spectrum display
-│   │   └── WaveformView.swift          # Waveform visualization
+│   │   ├── PlayerView.swift
+│   │   ├── SpectrumAnalyzerView.swift
+│   │   └── WaveformView.swift
 │   ├── Settings/
-│   │   ├── ModelSettingsView.swift      # Model configuration panel
-│   │   └── SettingsView.swift          # Settings panel
-│   ├── Sidebar/
-│   │   ├── PresetListView.swift        # Preset navigation list
-│   │   ├── RecentListView.swift        # Recent generations list
-│   │   └── SidebarView.swift           # Main sidebar navigation
-│   └── LogViewerView.swift             # Log viewer window
+│   │   ├── ModelSettingsView.swift
+│   │   └── SettingsView.swift
+│   └── Sidebar/
+│       ├── PresetListView.swift
+│       ├── RecentListView.swift
+│       └── SidebarView.swift
 │
-└── Resources/                          # Bundled assets
-```
+└── Resources/
 
-### Python Backend
-
-```
-AuraluxEngine/
-├── server.py                           # REST API wrapping ACE-Step v1.5 (~900 lines)
-├── setup_env.sh                        # Clones ACE-Step 1.5, installs deps via uv
-├── start_api_server_macos.sh           # Server launch script (port 8765)
-├── test_generate.py                    # Backend test script
-├── requirements.txt                    # Dependency documentation
-├── README.md                           # Engine-specific docs
-└── ACE-Step-1.5/                       # Cloned at setup time (gitignored)
-    ├── acestep/                        # ACE-Step Python package
-    ├── checkpoints/                    # Downloaded model weights (~4 GB)
-    ├── pyproject.toml                  # Python dependency definitions
-    └── .venv/                          # Virtual environment (via uv)
-```
-
-### Tests
-
-```
 AuraluxTests/
-├── ModelTests.swift                    # SwiftData model tests
-├── ServiceTests.swift                  # Service layer tests
-└── ViewModelTests.swift                # ViewModel behavior tests
+├── ModelTests.swift
+├── ServiceTests.swift
+├── ViewModelTests.swift
+├── ACEStepDiTTests.swift               # MLX integration (Xcode-only)
+├── ACEStepLMTests.swift                # MLX integration (Xcode-only)
+├── FeasibilityProbeTests.swift         # MLX integration (Xcode-only)
+├── Qwen3ConditioningTests.swift        # MLX integration (Xcode-only)
+└── Qwen3RealWeightsTests.swift         # MLX integration (Xcode-only)
+
+tools/
+└── convert_weights.py                  # PyTorch → MLX weight converter
+
+modeling_acestep_v15_turbo.py           # Reference PyTorch model (used by converter)
 ```
 
 ## Suggested Checks Before Opening a PR
 
 ```bash
-swift test
 swift build
-python3 -m py_compile AuraluxEngine/server.py
+swift test --skip 'ACEStepDiTTests|ACEStepLMTests|FeasibilityProbeTests|Qwen3ConditioningTests|Qwen3RealWeightsTests'
+python3 -m py_compile modeling_acestep_v15_turbo.py tools/convert_weights.py
 ```
+
+Run the MLX integration suites from Xcode if your change touches `Auralux/Inference/`.
 
 ## Troubleshooting
 
-- **Engine not found**: Run from the repository root, or set the `engine.directoryOverride` UserDefaults key to the AuraluxEngine path.
-- **Port conflict on 8765**: Set `AURALUX_SERVER_PORT=<new-port>` before starting server.
-- **Python venv issues**: Delete `AuraluxEngine/ACE-Step-1.5/.venv` and rerun `./setup_env.sh`.
-- **Model download stalls**: Check your internet connection. Models download from HuggingFace (~4 GB).
-- **Server crashes**: Check the setup log in the app or server output in terminal. The app's log viewer window (menu: Window > Auralux Logs) can help diagnose issues.
-- **App not appearing in Dock**: The app uses an `AppDelegate` to promote the SPM executable to a GUI application. Ensure `AuraluxApp.swift` has the `@NSApplicationDelegateAdaptor`.
+- **Setup overlay sticks at "downloading"**: check the Auralux log window (Window > Auralux Logs) for HTTP errors. Downloads are resumable — quit and re-launch and the engine will pick up where it left off.
+- **`weightsNotFound` error after download**: confirm every file listed in `NativeInferenceEngine.isDownloaded(_:)` is present under `~/Library/Application Support/Auralux/Models/<variant>/`. Non-turbo variants symlink into the turbo directory; if you deleted the turbo bundle, re-download it.
+- **`Run python tools/convert_weights.py …` error in Settings**: you selected an XL variant. Run the converter once and re-launch.
+- **Resident memory grows across generations**: enable Settings → Low-memory mode; it halves the MLX cache limit. Also confirm "Load 5 Hz LM" is off unless you actually need it (~1.2 GB extra).
+- **App not appearing in Dock**: the SPM executable relies on `AppDelegate` to set `setActivationPolicy(.regular)`. Make sure `AuraluxApp.swift` still uses `@NSApplicationDelegateAdaptor`.
+- **`swift build` complains about SDK version**: you need Xcode 26 or the macOS 26 SDK. CI runs on `macos-26` for the same reason.
 
 ## Coding Expectations
 
 - Keep PRs scoped and testable.
-- Add or update tests for behavior changes.
-- Update docs when introducing workflow or API changes.
+- Add or update tests for behavior changes (deterministic suites for logic, MLX integration suites for inference).
+- Update docs when introducing user-visible or workflow changes.
 - Follow Swift 6 concurrency patterns (`@Observable`, `actor`, `Sendable`, `async/await`).
-- Use `@MainActor` for ViewModels and UI-facing services.
-- Use `actor` for thread-safe services (e.g., `InferenceService`).
-- No Combine — use Swift structured concurrency instead.
-- Use `AppLogger.shared` for all logging with appropriate categories.
+- Use `@MainActor` for ViewModels and UI-facing services (incl. `NativeInferenceEngine`).
+- Use `actor` for thread-safe services (e.g. `ModelDownloader`).
+- No Combine — use Swift structured concurrency.
+- Use `AppLogger.shared` with appropriate categories.
 - Constants go in `AppConstants` — avoid magic strings and numbers.
+- For new generation knobs, extend `GenerationParameters` with `Codable` defaulting in the custom `init(from:)` so existing presets keep decoding.

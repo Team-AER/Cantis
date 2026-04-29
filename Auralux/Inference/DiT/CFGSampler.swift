@@ -9,8 +9,8 @@ import Foundation
 /// Uses APG (Adaptive Prompt Guidance) — the default guidance method in
 /// `modeling_acestep_v15_base.py` (`apg_forward`, norm_threshold=2.5, eta=0).
 /// Simple linear CFG at scale=15 diverges because the velocity diff is large;
-/// APG clips the per-element RMS of diff to ≤ 2.5, then projects orthogonal
-/// to v_cond. A momentum buffer (momentum=-0.75) smooths diff across steps.
+/// APG clips the per-feature L2 norm of diff (over time) to ≤ 2.5, then projects
+/// orthogonal to v_cond per feature. Momentum buffer (−0.75) smooths diff across steps.
 ///
 /// ODE update:  x_{t+1} = x_t − v_guided * dt
 /// Final step:  x_0     = x_t − v_guided * t
@@ -18,17 +18,17 @@ struct CFGSampler {
     let schedule: [Float]
     let cfgScale: Float
     // guidanceInterval ∈ (0, 1]: fraction of steps where APG is active (middle portion).
-    // Python pipeline default: 0.5 — guidance only on the central 50% of steps.
+    // Upstream default: 1.0 — CFG applied at every step (cfg_interval_start=0.0, end=1.0).
     // start = floor(N * (1 - interval) / 2),  end = floor(N * (interval/2 + 0.5))
     let guidanceInterval: Float
 
-    init(schedule: [Float], cfgScale: Float, guidanceInterval: Float = 0.5) {
+    init(schedule: [Float], cfgScale: Float, guidanceInterval: Float = 1.0) {
         self.schedule         = schedule
         self.cfgScale         = cfgScale
         self.guidanceInterval = guidanceInterval
     }
 
-    init(numSteps: Int, shift: Double, cfgScale: Float, guidanceInterval: Float = 0.5) throws {
+    init(numSteps: Int, shift: Double, cfgScale: Float, guidanceInterval: Float = 1.0) throws {
         self.schedule         = try buildFlowSchedule(numSteps: numSteps, maxSteps: 100, shift: shift)
         self.cfgScale         = cfgScale
         self.guidanceInterval = guidanceInterval
@@ -44,7 +44,7 @@ struct CFGSampler {
         nullConditionEmb: MLXArray,
         model: AceStepDiTModel,
         onStep: ((Int, Int) -> Void)? = nil
-    ) -> MLXArray {
+    ) throws -> MLXArray {
         let B  = noise.shape[0]
         let S  = encoderHiddenStates.shape[1]
         let N  = schedule.count
@@ -61,6 +61,7 @@ struct CFGSampler {
         var momentumRunning: MLXArray? = nil
 
         for (i, t) in schedule.enumerated() {
+            try Task.checkCancellation()
             let tTensor = MLXArray(Array(repeating: t, count: B))
 
             let vCond = model(
@@ -114,9 +115,10 @@ struct CFGSampler {
 /// Adaptive Prompt Guidance — mirrors `apg_forward()` in `acestep/apg_guidance.py`.
 ///
 /// 1. Momentum: running_avg = diff + (-0.75) * running_avg  (smooths diff across steps).
-/// 2. Norm-clip: clips diff when per-element RMS > 2.5.
-///    Python: diff.norm() / ones.norm() = L2 / sqrt(T*H) = RMS.  Must divide by sqrt(T*H).
-/// 3. Orthogonal projection: removes component of diff parallel to v_cond (eta=0).
+/// 2. Norm-clip: for each feature h, clips L2 norm of diff[:, :, h] over time to ≤ 2.5.
+///    Upstream: diff.norm(p=2, dim=[1], keepdim=True) — per-feature L2 over T, shape [B, 1, H].
+/// 3. Orthogonal projection: removes component of diff parallel to v_cond (eta=0), per feature.
+///    Upstream: project(diff, v_cond, dims=[1]) — projection along T for each H independently.
 /// 4. Returns v_cond + (scale-1) * diff_orthogonal.
 private func apgGuidance(
     vCond: MLXArray,
@@ -137,17 +139,16 @@ private func apgGuidance(
         momentumRunning = diff
     }
 
-    // Per-element RMS norm: L2(diff) / sqrt(T*H), matching Python's diff.norm()/ones.norm()
-    let T = Float(diff.shape[1])
-    let H = Float(diff.shape[2])
-    let diffNorm = sqrt((diff * diff).sum(axes: [1, 2], keepDims: true)) / MLXArray((T * H).squareRoot())
-    // clipScale = min(1, threshold / rmsNorm) — identity when rms ≤ threshold
+    // Per-feature L2 norm over time: shape [B, 1, H] — matches upstream dim=[1].
+    let diffNorm = sqrt((diff * diff).sum(axes: [1], keepDims: true))
+    // clipScale = min(1, threshold / norm) — identity when norm ≤ threshold
     let clipScale = MLXArray(normThreshold) / maximum(diffNorm, MLXArray(normThreshold))
     diff = diff * clipScale
 
-    // Project diff orthogonal to v_cond (eta=0: discard parallel component entirely)
-    let dot    = (diff * vCond).sum(axes: [1, 2], keepDims: true)
-    let normSq = (vCond * vCond).sum(axes: [1, 2], keepDims: true) + Float(1e-8)
+    // Project diff orthogonal to v_cond per feature (eta=0: discard parallel component).
+    // Matches upstream project(diff, v_cond, dims=[1]): dot product along T for each H.
+    let dot    = (diff * vCond).sum(axes: [1], keepDims: true)           // [B, 1, H]
+    let normSq = (vCond * vCond).sum(axes: [1], keepDims: true) + Float(1e-8)  // [B, 1, H]
     let diffOrthogonal = diff - (dot / normSq) * vCond
 
     return vCond + MLXArray(scale - 1.0) * diffOrthogonal

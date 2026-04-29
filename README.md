@@ -1,66 +1,53 @@
 # Auralux
 
-Auralux is a native macOS application for AI music generation, powered by ACE-Step v1.5 running entirely on Apple Silicon. Generate music from text prompts and lyrics, with full playback, history, and multi-format export — no cloud required.
+Auralux is a native macOS application for AI music generation. It runs ACE-Step v1.5 entirely on Apple Silicon — fully native Swift, no Python, no servers, no cloud. Generate music from text prompts and lyrics, with playback, history, and multi-format export.
 
 ## Features
 
-- **Text-to-music generation** — describe the music you want and Auralux generates it locally
-- **Lyrics support** — write vocal tracks with verse/chorus/bridge structure
-- **Tag system** — genre, instrument, and mood tags for precise control
+- **Text-to-music generation** — describe the music you want; the app generates it locally
+- **Lyrics support** — verse/chorus/bridge structure with ISO-639 language hint
+- **Tag system** — genre, instrument, and mood tags
+- **Multiple DiT variants** — Turbo (8-step CFG-distilled), SFT (60-step), Base (60-step)
+- **Generation modes** — `text2music`, `cover`, `repaint`, `extract`
+- **DiT knobs** — number of steps, schedule shift, CFG scale (where applicable)
 - **Real-time playback** — waveform visualization and FFT spectrum analyzer
-- **Multi-format export** — WAV, FLAC, MP3, AAC, ALAC with configurable settings
+- **Multi-format export** — WAV, FLAC, MP3, AAC, ALAC
 - **Preset system** — save and reuse generation configurations
-- **Generation history** — browse, search, and favorite past generations
-- **Audio-to-audio** — import reference audio for style transfer and remixing
-- **LoRA support** — load and manage LoRA models for style customization
-- **Generation queue** — queue multiple generation jobs
-- **On-device inference** — all processing on Apple Silicon via PyTorch MPS + MLX
-- **Guided setup** — first-launch onboarding handles everything automatically
-- **Log viewer** — built-in log window for debugging and monitoring
+- **Generation history** — browse, search, and favorite past tracks
+- **Audio import** — drag-and-drop reference / source audio for cover, repaint, extract
+- **Generation queue** — queue multiple jobs
+- **On-device inference** — pure Swift via [mlx-swift](https://github.com/ml-explore/mlx-swift)
+- **In-app model download** — first-launch onboarding fetches MLX-converted weights from HuggingFace
+- **Log viewer** — built-in window for debugging and monitoring
+- **Sandboxed** — App Sandbox enabled (no Python subprocess required)
 
 ## System Requirements
 
-- macOS 15+ (Sequoia)
+- macOS 26+
 - Apple Silicon (M1 or later)
-- 8 GB RAM minimum (16 GB recommended)
-- ~6 GB disk space (for models and Python environment)
-- Internet connection (for initial setup and model download)
+- 16 GB RAM recommended
+- ~6 GB free disk space for the Turbo variant (more if you add SFT / Base / XL)
+- Internet connection for the initial model download
 
 ## Quick Start
 
-### Option 1: Launch the app (recommended)
-
-Build and run the app. On first launch, the built-in setup flow will:
-1. Clone ACE-Step 1.5 and install Python dependencies via `uv`
-2. Start the local inference server
-3. Download AI models on first generation (~4 GB from HuggingFace)
-
 ```bash
 swift run Auralux
 ```
 
-Or open `Package.swift` in Xcode and run the Auralux target.
+Or open `Package.swift` in Xcode and run the `Auralux` target.
 
-### Option 2: Manual setup
+On first launch the in-app onboarding panel downloads the converted MLX weights from HuggingFace (`Team-AER/ace-step-v1.5-mlx`) into `~/Library/Application Support/Auralux/Models/`. After that the app loads weights into memory on demand and generation runs entirely locally.
 
-If you prefer to manage the engine separately:
+### Optional: convert XL or custom weights
 
-```bash
-# Set up the Python environment
-cd AuraluxEngine
-./setup_env.sh
-
-# Start the inference server
-./start_api_server_macos.sh
-```
-
-Then build and run the Swift app:
+The app downloads the Turbo, SFT, and Base variants directly. The XL variants and any custom checkpoints require a one-time conversion from the original PyTorch weights:
 
 ```bash
-swift run Auralux
+python tools/convert_weights.py --variant xl-turbo
 ```
 
-The app detects externally running servers and connects to them automatically.
+Converted weights are written into `~/Library/Application Support/Auralux/Models/<variant>/`.
 
 ## Running Tests
 
@@ -68,49 +55,54 @@ The app detects externally running servers and connects to them automatically.
 swift test
 ```
 
-CI also validates the Python server: `python3 -m py_compile AuraluxEngine/server.py`
+CI runs the deterministic Model / Service / ViewModel suites. The MLX inference suites (`ACEStepDiTTests`, `ACEStepLMTests`, `FeasibilityProbeTests`, `Qwen3ConditioningTests`, `Qwen3RealWeightsTests`) require local Metal / GPU and are intended to be run from Xcode.
 
 ## Project Layout
 
 ```
-Auralux/           SwiftUI app
-├── Views/           Screens (Onboarding, Generation, Player, History, Settings, Sidebar, AudioToAudio)
-├── ViewModels/      @Observable state management
-├── Services/        Business logic (Engine, Inference, Audio, History, Presets, Queue)
-├── Models/          SwiftData models (GeneratedTrack, Preset, Tag)
-├── Components/      Reusable UI (TagChip, SliderControl, EngineStatusView, AudioDropZone)
-└── Utilities/       Helpers (AppLogger, Constants, AudioFFT, FileUtilities)
+Auralux/                    # SwiftUI app
+├── AuraluxApp.swift          # @main, MLX cache config, ModelContainer, env injection
+├── Inference/                # Native Swift inference engine
+│   ├── NativeInferenceEngine.swift   # Coordinator: state, download, load, generate
+│   ├── DiT/                          # ACE-Step DiT, samplers, VAE, audio tokenizer
+│   ├── LM/                           # 5 Hz audio-token LM (optional)
+│   └── Text/                         # Qwen3 text encoder + tokenizer
+├── Views/                    # Onboarding, Generation, Player, History, Settings, Sidebar, AudioToAudio
+├── ViewModels/               # @Observable state (Generation, Player, History, Settings, Sidebar)
+├── Services/                 # AudioPlayer, AudioExport, History, Preset, Queue, ModelDownloader, ModelManager, PlaybackDiagnostics
+├── Models/                   # SwiftData models + DiTVariant + GenerationMode + GenerationParameters
+├── Components/               # TagChip, SliderControl, EngineStatusView, AudioDropZone, ProgressOverlay
+└── Utilities/                # AppLogger, Constants, AudioFFT, FileUtilities
 
-AuraluxEngine/     Python inference server wrapping ACE-Step v1.5
-AuraluxTests/      Unit tests (Models, Services, ViewModels)
-docs/              Architecture, development, and release documentation
-.github/           CI workflow, issue templates, PR template
+AuraluxTests/               # Unit + MLX integration tests
+docs/                       # Architecture, development, release docs
+tools/convert_weights.py    # PyTorch → MLX weight converter (XL / custom variants)
+modeling_acestep_v15_turbo.py # Reference PyTorch model (used by the converter only)
 ```
 
 ## Documentation
 
-- [Architecture](docs/ARCHITECTURE.md) — system design, engine lifecycle, API contract
+- [Architecture](docs/ARCHITECTURE.md) — system design, engine state machine, generation flow
 - [Development Guide](docs/DEVELOPMENT.md) — setup, workflow, project structure, troubleshooting
-- [Pending Plan](docs/PENDING_PLAN.md) — remaining implementation items
-- [Release Checklist](docs/RELEASE_CHECKLIST.md) — pre-release verification steps
-- [Engine README](AuraluxEngine/README.md) — inference server setup and API reference
-- [Contributing](CONTRIBUTING.md) — contribution guidelines and PR checklist
-- [Security](SECURITY.md) — vulnerability reporting policy
-- [Support](SUPPORT.md) — how to get help
-- [Code of Conduct](CODE_OF_CONDUCT.md) — community standards
+- [Pending Plan](docs/PENDING_PLAN.md) — remaining items
+- [Release Checklist](docs/RELEASE_CHECKLIST.md) — pre-release verification
+- [Contributing](CONTRIBUTING.md)
+- [Security](SECURITY.md)
+- [Support](SUPPORT.md)
+- [Code of Conduct](CODE_OF_CONDUCT.md)
 
 ## Technology
 
 | Layer | Technology |
 |-------|-----------|
-| UI | SwiftUI (macOS 15+) |
-| State | `@Observable` macro, SwiftData |
-| Inference | ACE-Step v1.5 (PyTorch MPS + MLX) |
+| UI | SwiftUI (macOS 26+) |
+| State | `@Observable`, SwiftData |
+| Inference | mlx-swift (MLX, MLXNN, MLXRandom) |
+| Models | ACE-Step v1.5 DiT (2B) + Qwen3 text encoder + DC-HiFi-GAN VAE + optional 5 Hz LM (0.6B) |
 | Audio | AVAudioEngine, Accelerate (vDSP FFT) |
 | Export | AVFoundation (WAV, FLAC, MP3, AAC, ALAC) |
-| Build | Swift Package Manager (Swift 6) |
-| Backend | Python 3.11+ with `uv` package manager |
-| CI | GitHub Actions (swift test + Python syntax validation) |
+| Build | Swift Package Manager (Swift 6.2) |
+| CI | GitHub Actions (`swift build` + CI-safe `swift test`) |
 
 ## License
 

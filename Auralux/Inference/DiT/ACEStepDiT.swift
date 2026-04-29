@@ -556,9 +556,11 @@ final class AceAudioDetokenizer: Module, @unchecked Sendable {
 
 final class AceStepDiTModel: Module, @unchecked Sendable {
     let timeEmbed: TimestepEmbedder
-    /// Turbo-only: residual timestep embedder for CFG distillation.
-    /// Nil for SFT / base variants.
-    let timeEmbedR: TimestepEmbedder?
+    /// Residual timestep embedder. Used by ALL variants — Turbo passes
+    /// `timestep_r ≠ timestep` for CFG distillation; SFT/base pass equal
+    /// values so the input is 0, but the bias terms still contribute a
+    /// non-zero, trained offset to `temb`.
+    let timeEmbedR: TimestepEmbedder
     let conditionEmbedder: Linear
     let projIn: Conv1d
     let layers: [AceStepDiTLayer]
@@ -572,9 +574,7 @@ final class AceStepDiTModel: Module, @unchecked Sendable {
         self.config       = config
         patchSize         = config.patchSize
         timeEmbed         = TimestepEmbedder(freqDim: config.freqDim, hiddenSize: config.hiddenSize)
-        timeEmbedR        = config.usesCFGDistillation
-            ? TimestepEmbedder(freqDim: config.freqDim, hiddenSize: config.hiddenSize)
-            : nil
+        timeEmbedR        = TimestepEmbedder(freqDim: config.freqDim, hiddenSize: config.hiddenSize)
         conditionEmbedder = Linear(config.encoderHiddenSize, config.hiddenSize, bias: true)
         projIn            = Conv1d(
             inputChannels:  config.inChannels,
@@ -598,8 +598,13 @@ final class AceStepDiTModel: Module, @unchecked Sendable {
     // contextLatents:      [B, T, inChannels - audioAcousticHiddenDim] — src + chunk mask
     // timestep/timestepR:  [B] float in [0,1]
     // encoderHiddenStates: [B, S, hiddenSize] — packed condition (lyric/timbre/text)
-    // encoderAttentionMask:[B, S] int 0/1 — pad mask from PackSequences (1 = valid).
-    //                       `nil` skips key-padding in cross-attn.
+    // encoderAttentionMask:[B, S] int 0/1 — accepted for API compatibility but
+    //   intentionally NOT applied to cross-attention. Upstream
+    //   `modeling_acestep_v15_base.py:1391-1435` overwrites both `attention_mask`
+    //   and `encoder_attention_mask` to `None` and rebuilds a fully-on 4D mask,
+    //   so cross-attn attends to every encoder position (including post-padding
+    //   values). The model was trained that way; masking padding here pulls
+    //   conditioning off-distribution and produces audible artifacts.
     func callAsFunction(
         hiddenStates: MLXArray,
         contextLatents: MLXArray,
@@ -608,6 +613,7 @@ final class AceStepDiTModel: Module, @unchecked Sendable {
         encoderHiddenStates: MLXArray,
         encoderAttentionMask: MLXArray? = nil
     ) -> MLXArray {
+        _ = encoderAttentionMask  // upstream-parity: discarded, see comment above
         let B   = hiddenStates.shape[0]
         let dim = scaleShiftTable.shape[2]
 
@@ -629,29 +635,23 @@ final class AceStepDiTModel: Module, @unchecked Sendable {
         // Project encoder hidden states
         let encH = conditionEmbedder(encoderHiddenStates)
 
-        // Build attention masks once.
         // Self-attn sliding mask is over the patched audio sequence (T_p = T // patchSize).
-        // Cross-attn key-padding mask is over the packed encoder sequence (S).
+        // Cross-attn uses no mask — see signature comment.
         let Tp = x.shape[1]
         let slidingSelfMask = (config.useSlidingWindow && Tp > 1)
             ? slidingWindowMask(seqLen: Tp, window: config.slidingWindow)
             : nil
-        let crossMask: MLXArray? = encoderAttentionMask.map { keyPaddingMask($0) }
+        let crossMask: MLXArray? = nil
 
-        // Timestep embeddings: temb [B, H], proj [B, 6, H]
+        // Timestep embeddings: temb [B, H], proj [B, 6, H].
+        // Upstream calls both embedders for ALL variants. For SFT/base, `timestep_r`
+        // equals `timestep` so the residual input is 0, but `time_embed_r(0)` is a
+        // non-zero, trained constant offset (Linear biases). Skipping it on SFT/base
+        // produces out-of-distribution time conditioning → garbled audio.
         let (tembT, projT) = timeEmbed(timestep)
-        let temb: MLXArray
-        let timestepProj: MLXArray
-        if let timeEmbedR {
-            // Turbo: residual CFG-distillation embedder
-            let (tembR, projR) = timeEmbedR(timestep - timestepR)
-            temb         = tembT + tembR
-            timestepProj = projT + projR
-        } else {
-            // SFT / base: no CFG distillation; CFG is applied outside by the sampler
-            temb         = tembT
-            timestepProj = projT
-        }
+        let (tembR, projR) = timeEmbedR(timestep - timestepR)
+        let temb         = tembT + tembR
+        let timestepProj = projT + projR
 
         for (idx, layer) in layers.enumerated() {
             let selfMask: MLXArray? = config.attentionType(for: idx) == "sliding_attention"

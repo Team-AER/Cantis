@@ -2,7 +2,7 @@
 
 ## Overview
 
-Auralux is a two-process macOS application: a SwiftUI frontend and a Python inference backend. They communicate over a local HTTP REST API on `127.0.0.1:8765`.
+Auralux is a single-process, fully native macOS application. The SwiftUI app and the inference engine run in the same Swift binary; there is no Python backend, no IPC layer, and no HTTP server. Inference runs on Apple Silicon via [mlx-swift](https://github.com/ml-explore/mlx-swift).
 
 ```
 ┌──────────────────────────────────────────────────┐
@@ -10,204 +10,226 @@ Auralux is a two-process macOS application: a SwiftUI frontend and a Python infe
 │    (@Observable, @Environment, @Query)            │
 ├──────────────────────────────────────────────────┤
 │              Service Layer                        │
-│  EngineService · InferenceService (actor)         │
 │  AudioPlayerService · AudioExportService          │
 │  HistoryService · PresetService                   │
-│  ModelManagerService · GenerationQueueService      │
+│  GenerationQueueService · PresetService           │
+│  ModelDownloader (actor) · ModelManagerService    │
+│  PlaybackDiagnosticsService                       │
 ├──────────────────────────────────────────────────┤
 │           SwiftData Persistence                   │
 │  GeneratedTrack · Preset · Tag                    │
 ├──────────────────────────────────────────────────┤
-│        Local HTTP REST API (port 8765)            │
-├──────────────────────────────────────────────────┤
-│        AuraluxEngine/server.py                    │
-│   ACE-Step v1.5 (PyTorch MPS + MLX)              │
+│            NativeInferenceEngine                  │
+│   ACE-Step v1.5 DiT + VAE + Qwen3 + (LM)          │
+│            mlx-swift (Metal / ANE)                │
 └──────────────────────────────────────────────────┘
 ```
 
 ## High-Level Components
 
-- **`Auralux/`** (Swift) — UI, state management, audio playback/export, local persistence, and engine lifecycle management.
-- **`AuraluxEngine/`** (Python) — local HTTP server wrapping ACE-Step v1.5 for real AI music generation on Apple Silicon.
-- **`AuraluxTests/`** (Swift) — unit tests for models, services, and view models.
+- **`Auralux/`** (Swift) — UI, state management, audio playback/export, persistence, and the entire inference stack.
+- **`Auralux/Inference/`** — native Swift port of the ACE-Step v1.5 pipeline running on mlx-swift.
+- **`AuraluxTests/`** — unit tests plus MLX integration suites (Xcode-only).
+- **`tools/convert_weights.py`** — one-shot PyTorch → MLX weight converter. Used to produce the XL variants and any custom checkpoints that aren't already published as MLX safetensors.
 
 ## Swift App Structure
 
 ### Views
 
-Screens organized by feature area:
-
-- `Onboarding/SetupView` — first-run setup flow (system check, environment setup, server start)
-- `Generation/` — main generation interface with tag editor, lyric editor, and parameter controls
-- `Player/` — audio playback with waveform visualization and FFT spectrum analyzer
-- `History/` — browse, search, and favorite past generations
-- `Settings/` — app and model configuration
-- `Sidebar/` — navigation with presets and recent tracks
-- `AudioToAudio/` — audio import and LoRA model management
-- `LogViewerView` — dedicated log viewer window (opened via `Window("Auralux Logs", id: "log-viewer")`)
+- `Onboarding/SetupView` — first-run overlay that downloads + loads model weights
+- `Generation/` — main generation UI (`GenerationView`, `LyricEditorView`, `ParameterControlsView`, `TagEditorView`)
+- `Player/` — playback with `WaveformView` and `SpectrumAnalyzerView`
+- `History/` — browse, search, favorite past tracks
+- `Settings/` — `SettingsView`, `ModelSettingsView`
+- `Sidebar/` — navigation, presets, recent tracks
+- `AudioToAudio/` — audio import (cover / repaint / extract sources) and LoRA management
+- `LogViewerView` — opened via `Window("Auralux Logs", id: "log-viewer")`
 
 ### ViewModels
 
-All use the `@Observable` macro and `@MainActor` for UI-safe state management:
+`@Observable`, `@MainActor`:
 
-- `GenerationViewModel` — generation orchestration, request building, progress tracking
-- `PlayerViewModel` — playback state (play, pause, scrub, loop)
-- `HistoryViewModel` — history browsing, search, filtering
-- `SidebarViewModel` — navigation state
-- `SettingsViewModel` — settings persistence via UserDefaults
+- `GenerationViewModel` — request building, progress streaming, last track
+- `PlayerViewModel` — playback state
+- `HistoryViewModel` — history browsing
+- `SidebarViewModel` — navigation
+- `SettingsViewModel` — UserDefaults-backed settings (DiT variant, default mode/steps/CFG, LM toggle, low-memory mode)
 
 ### Services
 
-Business logic boundary, injected via `@Environment`:
+Injected via `@Environment` from `AuraluxApp.init()`:
 
-- **`EngineService`** — owns the full engine lifecycle (setup detection, environment provisioning, server start/stop, health monitoring, graceful shutdown). See [Engine Lifecycle](#engine-lifecycle) below.
-- **`InferenceService`** — Swift `actor` that makes HTTP requests to the Python server. Thread-safe by design.
-- **`AudioPlayerService`** — `AVAudioEngine` wrapper for playback, waveform data, and real-time FFT.
-- **`AudioExportService`** — multi-format export (WAV 16/24/32-bit, FLAC, MP3, AAC, ALAC) with configurable sample rates.
-- **`HistoryService`** — SwiftData CRUD for `GeneratedTrack`, search, and favorites.
-- **`PresetService`** — preset CRUD, import/export.
-- **`ModelManagerService`** — tracks model download status and triggers downloads via `/models/download`.
-- **`GenerationQueueService`** — job queue with priority ordering.
+- **`AudioPlayerService`** — `AVAudioEngine` wrapper, waveform data, real-time FFT
+- **`AudioExportService`** — multi-format export (WAV 16/24/32-bit, FLAC, MP3, AAC, ALAC)
+- **`HistoryService`** — SwiftData CRUD for `GeneratedTrack`, search, favorites, orphan reconciliation
+- **`PresetService`** — preset CRUD, bundle bootstrap
+- **`GenerationQueueService`** — job queue with priority ordering
+- **`ModelDownloader`** (`actor`) — sequential, resumable HuggingFace downloads with weighted progress, post-download symlinking for variants that share components
+- **`ModelManagerService`** — registry of MLX artifacts (turbo / sft / base / xl-*)
+- **`PlaybackDiagnosticsService`** — diagnostics capture for misbehaving outputs
 
 ### Models
 
-SwiftData `@Model` types:
+SwiftData `@Model` types and request DTOs:
 
-- **`GeneratedTrack`** — metadata for generated music (prompt, tags, parameters, audio file path, timestamps, favorite flag)
-- **`Preset`** — saved generation configurations (name, tags, duration, variance, lyrics template)
+- **`GeneratedTrack`** — generated music metadata, parameters, file path, favorite flag
+- **`Preset`** — saved generation configurations
 - **`Tag`** — reusable tag library with usage tracking
-- **`GenerationParameters`** — `Codable` struct for request parameters (not a SwiftData model)
+- **`GenerationParameters`** — `Codable` request struct (prompt, lyrics, tags, duration, variance, seed, language, mode, numSteps, scheduleShift, cfgScale, source/refer audio, repaint mask)
+- **`DiTVariant`** — `turbo` / `sft` / `base` / `xl-turbo` / `xl-sft` / `xl-base`; encodes display name, MLX directory name, default num steps and CFG scale, max steps, CFG-distillation flag, and "can download in app" flag
+- **`GenerationMode`** — `text2music` / `text2musicLM` / `cover` / `repaint` / `extract`
 
 ### Components
 
-Reusable UI building blocks:
-
-- `EngineStatusView` — compact toolbar badge showing engine state (red/yellow/green)
-- `TagChip` — genre, instrument, and mood tag display
-- `SliderControl` — custom parameter slider with label and value display
-- `ProgressOverlay` — indeterminate and determinate progress indicator
-- `AudioDropZone` — drag-and-drop target for audio file import
+- `EngineStatusView` — toolbar badge driven by `NativeInferenceEngine.modelState`
+- `TagChip`, `SliderControl`, `ProgressOverlay`, `AudioDropZone`
 
 ### Utilities
 
-- `AppLogger` — centralized logging via `OSLog` with categories (`.app`, `.engine`, `.inference`, etc.)
-- `AudioFFT` — Accelerate vDSP FFT computation for spectrum visualization
-- `Constants` — app-wide constants (server URL, model names, suggested tags, window dimensions)
-- `FileUtilities` — file path helpers for Application Support directories
-
-## Engine Lifecycle
-
-`EngineService` is the central coordinator for the Python inference backend. It uses a state machine:
-
-```
-unknown → notSetup → settingUp(progress) → starting → running → ready
-                                                              ↘ error(message)
-```
-
-### State Descriptions
-
-| State | Meaning | UI Effect |
-|-------|---------|-----------|
-| `unknown` | App just launched, checking setup status | Loading indicator |
-| `notSetup` | ACE-Step environment not found | Shows `SetupView` onboarding |
-| `settingUp(progress)` | Running `setup_env.sh` subprocess | Progress display with log output |
-| `starting` | Python server launched, waiting for `/health` | Starting indicator |
-| `running` | Server responding to health checks | Engine status badge turns yellow |
-| `ready` | Server healthy and models loaded | Badge turns green, generation enabled |
-| `error(message)` | Setup or server failure | Error display, retry option |
-
-### Lifecycle Flow
-
-1. On launch, `EngineService` checks if the environment is set up (ACE-Step-1.5 directory, venv).
-2. If not set up, the app shows `SetupView` which runs `setup_env.sh` as a subprocess, streaming output to `setupLog`.
-3. Once the environment is ready, `EngineService` starts the Python server via `start_api_server_macos.sh`.
-4. Health monitoring begins — periodic `GET /health` requests.
-5. When the server reports healthy with models loaded, state transitions to `ready`.
-6. If the server crashes, `EngineService` attempts auto-restart.
-7. On app quit, `shutdown()` terminates the server process gracefully.
-
-### External Server Support
-
-If a user runs the server manually (e.g., for debugging), the app detects the externally running server via `/health` and connects to it directly, skipping subprocess management.
-
-## Concurrency Model
-
-- **`@MainActor`** — all ViewModels and `EngineService` (they update UI state)
-- **`actor`** — `InferenceService` (thread-safe HTTP client)
-- **`async/await`** — all asynchronous operations use Swift structured concurrency
-- **`Task`** — used for fire-and-forget operations (health monitoring loop)
-- **No Combine** — the codebase does not use Combine publishers
-
-## Generation Flow
-
-1. User configures prompt, tags, lyrics, and parameters in `GenerationView`.
-2. `GenerationViewModel` validates inputs and builds a `GenerationRequest`.
-3. `InferenceService.generate()` POSTs the request to `/generate` on the Python server.
-4. The server enqueues the job and returns a `jobID`.
-5. `InferenceService` polls `GET /jobs/<id>` for progress updates.
-6. The Python server runs ACE-Step v1.5 inference:
-   - **DiT model** (`acestep-v15-turbo`) — 8-step turbo inference via PyTorch MPS
-   - **LM model** (`acestep-5Hz-lm-0.6B`) — metadata/CoT reasoning via MLX
-7. On completion, the server writes the audio file and returns the path.
-8. A `GeneratedTrack` is created and persisted via `HistoryService`.
-9. The track appears in history and can be played in `PlayerView`.
+- `AppLogger` — `OSLog` wrapper with categories (`.app`, `.inference`, `.audio`, …)
+- `AudioFFT` — vDSP FFT for the spectrum analyzer
+- `Constants` — `AppConstants` (app name, window dimensions, suggested tags, model directory names, HF repo IDs)
+- `FileUtilities` — Application Support path helpers
 
 ## Inference Engine
 
-The Python server (`AuraluxEngine/server.py`) wraps ACE-Step v1.5:
+`Auralux/Inference/NativeInferenceEngine.swift` is the central coordinator. It is `@MainActor @Observable`, owns weights for the active `DiTVariant`, and exposes a single `generate(request:)` API that returns an `AsyncThrowingStream<GenerationProgress, Error>`.
 
-- **DiT model**: `acestep-v15-turbo` — 8-step turbo inference via PyTorch MPS
-- **LM model**: `acestep-5Hz-lm-0.6B` — metadata/CoT reasoning via MLX
-- Models auto-download from HuggingFace on first generation (~4 GB total)
-- Stub fallback produces silent WAV files when models are not yet available
+### Sub-components
 
-### MPS Workarounds
+```
+Inference/
+├── NativeInferenceEngine.swift     # Coordinator (download/load/generate)
+├── DiT/
+│   ├── ACEStepDiT.swift              # ACE-Step DiT block (2B params, MLX)
+│   ├── DiTWeightLoader.swift         # safetensors → ACEStepDiT
+│   ├── TurboSampler.swift            # 8-step CFG-distilled sampler
+│   ├── CFGSampler.swift              # 60-step twin-pass CFG sampler (base/SFT)
+│   ├── AudioVAE.swift                # DC-HiFi-GAN VAE (latent → audio)
+│   ├── VAEWeightLoader.swift
+│   ├── AceStepAudioTokenizer.swift   # FSQ audio token codec
+│   ├── AudioFileLoader.swift         # cover / repaint / extract source loading
+│   └── SilenceLatentLoader.swift     # Initial silence latent for unconditional padding
+├── LM/                                # Optional 5 Hz audio-token LM (0.6B)
+│   ├── ACEStepLM.swift
+│   ├── ACEStepLMSampler.swift
+│   ├── BPETokenizer.swift
+│   └── LMWeightLoader.swift
+└── Text/                              # Qwen3 text conditioning encoder
+    ├── Qwen3Encoder.swift
+    ├── Qwen3EncoderWeightLoader.swift
+    ├── Qwen3Tokenizer.swift
+    └── PackSequences.swift
+```
 
-The server includes runtime patches for known PyTorch MPS bugs on Apple Silicon:
+### Variants
 
-| Workaround | Description |
-|------------|-------------|
-| `masked_fill` CPU fallback | MPS does not support `masked_fill` for certain tensor types |
-| `inference_mode` → `no_grad` | MPS backend does not fully support `inference_mode` |
-| Audio codec CPU fallback | Audio decoding routed to CPU for stability |
-| Text encoder CPU fallback | Text encoding runs on CPU to avoid MPS errors |
-| DiT condition encoder CPU fallback | Condition encoder routed to CPU |
+| Variant | Steps | CFG-distilled | App download | Notes |
+|---------|-------|---------------|--------------|-------|
+| `turbo` | 8 (≤20) | yes | yes | Default; ships full bundle (DiT + LM + VAE + text) |
+| `sft` | 60 (≤100) | no | yes | DiT-only; symlinks `lm/`, `vae/`, `text/` from turbo |
+| `base` | 60 (≤100) | no | yes | DiT-only; symlinks shared components |
+| `xl-turbo` / `xl-sft` / `xl-base` | — | — | no | Require `tools/convert_weights.py` |
 
-These patches are applied at server startup before any model loading.
+CFG-distilled variants (Turbo) ignore `cfgScale > 1`. Base / SFT use a twin-pass CFG sampler.
+
+### Generation Modes
+
+`GenerationMode` mirrors the upstream ACE-Step v1.5 feature matrix:
+
+- `text2music` — pure text conditioning (default)
+- `cover` — refer audio + source audio
+- `repaint` — source audio + masked time ranges with crossfade and injection ratio
+- `extract` — refer audio
+- `text2musicLM` — opt-in path requiring the 5 Hz audio-token LM (not yet wired end-to-end)
+
+## Engine State Machine
+
+`NativeInferenceEngine.modelState` drives onboarding and the generation guard.
+
+```
+notDownloaded ──▶ downloading(progress) ──▶ downloaded ──▶ loading ──▶ ready
+       ▲                                                                │
+       └──────────────── error(message) ◀───────────────────────────────┘
+```
+
+| State | Meaning | UI Effect |
+|-------|---------|-----------|
+| `notDownloaded` | No converted weights for current variant | `SetupView` overlay shown |
+| `downloading(progress)` | `ModelDownloader` is fetching the variant's manifest | Setup progress bar, engine badge yellow |
+| `downloaded` | Weights on disk, not yet loaded into memory | Generate disabled until `loadModels()` |
+| `loading` | Weights being read into MLX arrays on a detached task | Engine badge yellow |
+| `ready` | DiT (+ optional LM) + VAE + Qwen3 resident | Engine badge green, generate enabled |
+| `error(message)` | Download or load failure | Error UI with retry |
+
+`ContentView` calls `engine.checkStatus()` on first appearance. If the variant's required files are present on disk it transitions to `downloaded`, otherwise to `notDownloaded` and shows `SetupView`. `SetupView.downloadAndLoad()` drives the variant download + load.
+
+`isGenerating` is a separate `@Observable` flag tracked by the engine while a generation task is running.
+
+## Concurrency Model
+
+- **`@MainActor`** — ViewModels, `NativeInferenceEngine`
+- **`actor`** — `ModelDownloader` (sequential file downloads with weighted progress callbacks)
+- **`async/await`** — all async APIs use Swift structured concurrency
+- **`Task.detached(priority: .userInitiated)`** — heavy work (weight loading, generation) is dispatched off the main actor
+- **`AsyncThrowingStream`** — generation progress is streamed back to the ViewModel
+- **No Combine**
+
+## Generation Flow
+
+1. User configures `GenerationParameters` in `GenerationView` (mode, prompt, tags, lyrics, duration, variance, seed, num steps, schedule shift, CFG scale, optional source/refer audio, repaint mask).
+2. `GenerationViewModel` calls `NativeInferenceEngine.generate(request:)`.
+3. The engine validates state, picks the sampler for the variant (`TurboSampler` for CFG-distilled, `CFGSampler` for base/SFT), and runs:
+   - **Qwen3 text encoder** → conditioning tokens
+   - **AceStepAudioTokenizer / AudioFileLoader** when the mode requires source/refer audio
+   - **DiT sampler** → latent of shape `[B, C, T_latent]`
+   - **DC-HiFi-GAN VAE** → 48 kHz audio
+4. Progress is streamed via `AsyncThrowingStream<GenerationProgress, Error>` (`preparing` → `step(current, total)` → `saving` → `completed(audioURL)`).
+5. The output is written to `~/Library/Application Support/Auralux/Generated/` and persisted to SwiftData via `HistoryService`.
+6. The track appears in history and can be played back in `PlayerView`.
+
+## Model Storage and Downloads
+
+- Root: `~/Library/Application Support/Auralux/Models/<variant-directory>/`
+- Variant directory names come from `DiTVariant.mlxDirectoryName` (e.g. `ace-step-v1.5-mlx`, `ace-step-v1.5-sft-mlx`).
+- Each variant must contain:
+  ```
+  dit/dit_weights.safetensors
+  dit/silence_latent.safetensors
+  lm/lm_weights.safetensors
+  vae/vae_weights.safetensors
+  text/text_weights.safetensors
+  text/text_vocab.json
+  text/text_merges.txt
+  ```
+  Plus tokenizer JSON / merges files for the LM when `useLM` is on.
+- `ModelDownloader.manifest(for:)` is the source of truth for files and approximate sizes (used to weight overall download progress).
+- Non-turbo variants only ship `dit/` files in their HF repo. Their `lm/`, `vae/`, and `text/` directories are created as symlinks pointing at the turbo directory after download.
+- Downloads are sequential, file-level resumable (already-present files are skipped), and emit a single weighted progress value in `[0, 1]`.
 
 ## Persistence
 
 SwiftData stores all structured data:
 
-- **`GeneratedTrack`** — generated music metadata and audio file paths
+- **`GeneratedTrack`** — generated music metadata and audio file paths (relative for sandbox resilience)
 - **`Preset`** — saved generation parameter configurations
 - **`Tag`** — reusable tag library with usage counts
 
-Audio files are stored in `~/Library/Application Support/Auralux/Generated/` using relative paths for sandbox resilience.
-
-The `ModelContainer` is created once in `AuraluxApp.init()` and injected via `.modelContainer()`.
-
-## API Contract
-
-| Endpoint | Method | Request | Response |
-|----------|--------|---------|----------|
-| `/health` | GET | — | `{ status, models_loaded, device, ... }` |
-| `/generate` | POST | `{ prompt, tags, lyrics, duration, variance, seed }` | `{ job_id }` |
-| `/jobs/<id>` | GET | — | `{ status, progress, audio_path, error }` |
-| `/jobs/<id>/cancel` | POST | — | `{ cancelled }` |
-| `/models/download` | POST | — | `{ status }` |
+Audio files are stored in `~/Library/Application Support/Auralux/Generated/`. The `ModelContainer` is created once in `AuraluxApp.init()` and injected via `.modelContainer()`.
 
 ## App Entry Point
 
-`AuraluxApp.swift` serves as the composition root:
+`AuraluxApp.swift` is the composition root:
 
-1. Creates `InferenceService`, `EngineService`, and all ViewModels
-2. Initializes the SwiftData `ModelContainer` for `GeneratedTrack`, `Preset`, `Tag`
-3. Injects everything into the SwiftUI environment
-4. Defines two windows: the main `WindowGroup` and a `Window` for the log viewer
-5. Includes an `AppDelegate` that promotes the SPM executable to a regular GUI application (menu bar, Dock icon)
+1. Caps the MLX freed-buffer pool (`MLX.Memory.cacheLimit`) at 1 GB (512 MB in low-memory mode). MLX otherwise retains every buffer it has allocated, growing resident memory to the high-water mark of the union of all phases (weight load + DiT activations + VAE decode).
+2. Constructs `NativeInferenceEngine` and the ViewModels (`Generation`, `History`, `Player`, `Settings`, `Sidebar`).
+3. Initializes the SwiftData `ModelContainer` for `GeneratedTrack`, `Preset`, `Tag`.
+4. Injects everything into the SwiftUI environment.
+5. Defines the main `WindowGroup` and the `Window("Auralux Logs", id: "log-viewer")` log viewer.
+6. Includes an `AppDelegate` that promotes the SPM executable to a regular GUI application (menu bar, Dock icon) and forwards `applicationWillTerminate` to `engine.shutdown()` and the player service.
 
-## Distribution
+## Sandboxing and Distribution
 
-- **Phase 1 (current):** Direct distribution with notarization. The app launches the Python server as a subprocess. Not compatible with the Mac App Store sandbox.
-- **Phase 2 (future):** Mac App Store via XPC service or native mlx-swift inference port, eliminating the Python dependency.
+- The app ships with the App Sandbox enabled (`com.apple.security.app-sandbox` = `true`).
+- Required entitlements: `com.apple.security.network.client` (for HuggingFace downloads), `com.apple.security.files.user-selected.read-write` (for audio import / export panels), `com.apple.security.device.audio-input` (reserved for future capture features).
+- Because there is no Python subprocess, sandbox compatibility is no longer an architectural blocker — Mac App Store distribution is feasible once code signing and packaging are in place. The remaining work is signing, notarization, asset design, and packaging (see `docs/PENDING_PLAN.md`).

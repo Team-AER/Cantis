@@ -2,133 +2,95 @@
 
 ## Goal
 
-Make Auralux a **single-app experience** where users launch the app and everything
-works automatically — no terminal commands, no manual setup. The app should handle
-Python environment setup, server lifecycle, and model downloads entirely on its own.
+Auralux is a single-process, fully native macOS app: launch it, download weights once, generate music — entirely on-device. The architectural plumbing (Python subprocess, HTTP server, IPC) is gone. The remaining work is polish, distribution, and feature breadth.
 
 ### Distribution Strategy
 
 | Channel | Status | Requirements |
 |---------|--------|-------------|
-| **Direct distribution** (notarized DMG/zip) | Target for Phase 1 | Hardened Runtime + notarization |
-| **Mac App Store** | Future (Phase 2) | XPC service or mlx-swift native port to eliminate Python subprocess |
+| Direct distribution (notarized DMG/zip) | In progress | Hardened Runtime + notarization |
+| Mac App Store | Feasible (no longer architecturally blocked) | Code signing, provisioning, asset polish |
 
-The App Sandbox disallows `Process()` for arbitrary subprocesses. For direct
-(notarized) distribution this is fine — we disable the sandbox. For the Mac App
-Store, inference must move to an XPC helper or a native mlx-swift port. This plan
-focuses on making Phase 1 rock-solid.
+The App Sandbox is enabled. Because all inference is now in-process via mlx-swift, neither distribution channel needs an XPC helper.
 
 ---
 
-## Completed Items
+## Completed
 
-### 1. Engine Lifecycle Service ✅
+### Native Swift inference engine
 
-**File:** `Auralux/Services/EngineService.swift`
+`Auralux/Inference/NativeInferenceEngine.swift` plus `DiT/`, `LM/`, `Text/` subtrees implement the full ACE-Step v1.5 pipeline on mlx-swift:
 
-A single `@Observable` service that owns the entire engine lifecycle:
+- ACEStepDiT (2B params) with `TurboSampler` (8-step CFG-distilled) and `CFGSampler` (60-step twin-pass)
+- DC-HiFi-GAN VAE for latent → 48 kHz audio
+- Qwen3 text encoder for conditioning
+- Optional 5 Hz audio-token LM (0.6B), gated behind a Settings toggle
+- AceStep audio tokenizer + repaint / cover / extract source loaders
 
-- **Setup detection** — checks for ACE-Step-1.5 directory and venv
-- **Automatic setup** — runs `setup_env.sh` as a subprocess, streams output to `setupLog`
-- **Server start/stop** — manages the Python server process
-- **Health monitoring** — periodic health checks via `/health`, auto-restart on crash
-- **Model status** — tracks whether models are downloaded and loaded
-- **Graceful shutdown** — stops the server when the app quits
+State machine: `notDownloaded → downloading → downloaded → loading → ready` (with `error(message)` recoverable from any state).
 
-States: `unknown → notSetup → settingUp → starting → running → ready → error`
+### In-app onboarding and download
 
-### 2. Onboarding / First-Run View ✅
+`SetupView` overlay drives `NativeInferenceEngine.downloadAndLoad()`. `ModelDownloader` (actor) fetches the active variant's manifest from HuggingFace sequentially with weighted progress, skipping files that already exist on disk, and creates symlinks from non-turbo variants into the turbo bundle for shared components.
 
-**File:** `Auralux/Views/Onboarding/SetupView.swift`
+### Variants and modes
 
-Shown automatically when the engine is not yet configured:
+- DiT variants: `turbo`, `sft`, `base` (app-downloadable); `xl-turbo`, `xl-sft`, `xl-base` (require `tools/convert_weights.py`)
+- Generation modes: `text2music`, `cover`, `repaint`, `extract` wired end-to-end; `text2musicLM` reserved for the LM-driven hint path
 
-1. **System check** — verify Apple Silicon, macOS 15+, disk space
-2. **Environment setup** — clone ACE-Step 1.5, install Python deps via `uv`
-3. **Server start** — launch the local inference server
-4. **Model download** — models auto-download on first generation; show status
-5. **Ready** — transition to the main app
+### App shell and UX
 
-Features: animated progress, step-by-step flow, error recovery, skip option
-for users who already have the server running externally.
+- `AuraluxApp` configures `MLX.Memory.cacheLimit`, builds the SwiftData `ModelContainer`, injects services via `@Environment`
+- `AppDelegate` promotes the SPM executable to a regular GUI app and forwards termination
+- `EngineStatusView` toolbar badge reflects `modelState`
+- Generation, playback, multi-format export, history, presets, queue, log viewer
 
-### 3. Engine Status Indicator ✅
+### Build and tests
 
-**File:** `Auralux/Components/EngineStatusView.swift`
+- `swift build` clean on Swift 6.2 / macOS 26 SDK
+- Deterministic Model / Service / ViewModel suites pass on CI (`macos-26`)
+- MLX integration suites (`ACEStepDiTTests`, `ACEStepLMTests`, `FeasibilityProbeTests`, `Qwen3ConditioningTests`, `Qwen3RealWeightsTests`) run from Xcode against real weights
+- `python -m py_compile modeling_acestep_v15_turbo.py tools/convert_weights.py` runs in CI
 
-A compact status badge shown in the main app toolbar:
+### App Sandbox
 
-- Red — Not configured / Error
-- Yellow — Setting up / Starting / Downloading models
-- Green — Ready
-
-Clicking opens the Settings > Models view for details.
-
-### 4. App Entry Point ✅
-
-**Files:** `AuraluxApp.swift`, `ContentView.swift`
-
-- `EngineService` injected into the environment
-- On launch: checks engine state, shows onboarding if needed
-- On quit: gracefully stops the server via `shutdown()`
-- `ContentView` shows `SetupView` overlay when engine needs attention
-- Engine status indicator in the toolbar
-- Log viewer window available via `Window("Auralux Logs", id: "log-viewer")`
-
-### 5. Generation Guard ✅
-
-**File:** `Auralux/Views/Generation/GenerationView.swift`
-
-- Generate button disabled when the engine is not ready
-- Clear message directing users to complete setup
-- When engine is starting/downloading, shows appropriate status
-
-### 6. Documentation ✅
-
-- **ARCHITECTURE.md** — documents real ACE-Step 1.5 integration and engine lifecycle
-- **README.md** — updated setup instructions and feature list
-- **DEVELOPMENT.md** — development workflow details, complete project structure
-
-### 7. Build & Test Verification ✅
-
-- Clean build with `swift build`
-- Tests pass with `swift test`
-- Python server compiles: `python -m py_compile AuraluxEngine/server.py`
-- CI validates both on every push/PR
+Sandbox enabled with `network.client`, `files.user-selected.read-write`, and `device.audio-input` entitlements. No subprocess spawning required.
 
 ---
 
 ## Remaining Items
 
-### Distribution Preparation
+### Distribution
 
 | Item | Status | Notes |
 |------|--------|-------|
-| Apple Developer certificate | Not started | Requires paid Apple Developer account |
-| Code signing & notarization | Not started | Needs Xcode + Developer ID |
-| App icon and brand assets | Not started | Asset design task |
-| DMG/installer packaging | Not started | Needs create-dmg or similar tool |
-| Python runtime bundling in .app | Not started | Optional; py2app or custom framework |
+| Apple Developer ID certificate | Not started | Paid Apple Developer account |
+| Code signing (Hardened Runtime) | Not started | For direct distribution |
+| Notarization workflow | Not started | `xcrun notarytool` against signed builds |
+| App icon and brand assets | Not started | Asset design |
+| DMG packaging | Not started | `create-dmg` or similar |
+| Mac App Store provisioning | Not started | Now feasible (no XPC needed) |
 
-### Phase 2 — Native Inference
-
-| Item | Status | Notes |
-|------|--------|-------|
-| XPC Service for App Store | Not started | Major architecture change to comply with sandbox |
-| mlx-swift native inference port | Not started | Months of porting; eliminates Python dependency |
-| INT8/FP16 quantization options | Not started | Reduces model size and memory usage |
-
-### Polish & Advanced Features
+### Inference / model breadth
 
 | Item | Status | Notes |
 |------|--------|-------|
-| Multi-track generation (vocal + instrumental) | Not started | Depends on ACE-Step capabilities |
-| Stem export | Not started | Individual track export |
-| Batch generation with seed arrays | Not started | Queue service exists but needs batch UI |
-| Keyboard shortcuts for all actions | Not started | Accessibility improvement |
-| URL scheme handler (`auralux://generate?...`) | Not started | Inter-app communication |
-| Memory pressure monitoring | Not started | Graceful degradation on low-memory systems |
-| Performance profiling with Instruments | Not started | GPU, Memory, Energy profiling |
+| Wire `text2musicLM` end-to-end | Not started | Needs upstream-canonical FSQ codebook → detokenize → src_latents path; `ACEStepLMSampler` is the integration point |
+| INT8 / FP8 quantization | Not started | `SettingsViewModel.QuantizationMode` currently only exposes `fp16`; expand once mlx-swift quant kernels stabilize |
+| LoRA loading | Not started | `LoRAManagerView` exists as a UI shell; engine-side loader / merge not implemented |
+| XL variants in-app download | Not started | Currently script-only via `tools/convert_weights.py`; publish as MLX safetensors and add manifest entries to enable in-app download |
+| Memory pressure monitoring | Not started | Auto-toggle low-memory mode based on `os_proc_available_memory` / pressure events |
+
+### Polish / advanced features
+
+| Item | Status | Notes |
+|------|--------|-------|
+| Multi-track generation (vocal + instrumental) | Not started | Depends on upstream support |
+| Stem export | Not started | Per-track export |
+| Batch generation with seed arrays | Not started | Queue service exists; needs batch UI |
+| Keyboard shortcuts coverage | Partial | Audit and document |
+| URL scheme handler (`auralux://generate?...`) | Not started | Inter-app integration |
+| Performance profiling pass | Not started | Instruments: GPU, Memory, Energy |
 
 ---
 
@@ -137,23 +99,22 @@ Clicking opens the Settings > Models view for details.
 ```
 ┌────────────────────────────────────────────────────┐
 │                  AuraluxApp.swift                   │
-│   Creates EngineService, injects into environment  │
+│  Builds NativeInferenceEngine + ViewModels +       │
+│  ModelContainer; injects via @Environment          │
 ├─────────────┬──────────────────────────────────────┤
 │  SetupView  │           ContentView                │
-│ (onboarding)│  ┌─────────┬──────────┬──────────┐   │
-│  shown when │  │Sidebar  │Generation│ Player   │   │
-│  engine not │  │         │  View    │  View    │   │
-│  ready      │  │EngineStatus badge in toolbar  │   │
+│ (overlay    │  ┌─────────┬──────────┬──────────┐   │
+│  while      │  │Sidebar  │Generation│ Player   │   │
+│  engine.    │  │         │  View    │  View    │   │
+│  isOnboard) │  │EngineStatus badge in toolbar  │   │
 ├─────────────┴──┴─────────┴──────────┴──────────┘   │
-│                   EngineService                     │
-│  ┌──────────┐  ┌────────────┐  ┌──────────────┐    │
-│  │  Setup   │  │  Server    │  │   Health     │    │
-│  │Detection │  │ Lifecycle  │  │  Monitoring  │    │
-│  └──────────┘  └────────────┘  └──────────────┘    │
+│              NativeInferenceEngine                  │
+│  ┌──────────────┐  ┌──────────┐  ┌─────────────┐   │
+│  │ ModelDownload│  │ Weight   │  │   Sampler   │   │
+│  │   (actor)    │  │ Loaders  │  │ + VAE + Text│   │
+│  └──────────────┘  └──────────┘  └─────────────┘   │
 ├────────────────────────────────────────────────────┤
-│            InferenceService (HTTP client)           │
-├────────────────────────────────────────────────────┤
-│            AuraluxEngine/server.py                  │
-│              ACE-Step v1.5 inference                │
+│                    mlx-swift                        │
+│              (Metal / Apple Silicon)                │
 └────────────────────────────────────────────────────┘
 ```

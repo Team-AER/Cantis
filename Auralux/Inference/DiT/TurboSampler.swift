@@ -114,7 +114,7 @@ struct TurboSampler {
         model: AceStepDiTModel,
         repaint: RepaintInputs? = nil,
         onStep: ((Int, Int) -> Void)? = nil
-    ) -> MLXArray {
+    ) throws -> MLXArray {
         let B  = noise.shape[0]
         var xt = noise
 
@@ -124,6 +124,7 @@ struct TurboSampler {
         }()
 
         for (i, t) in schedule.enumerated() {
+            try Task.checkCancellation()
             let tTensor = MLXArray(Array(repeating: t, count: B))
 
             let vt = model.callAsFunction(
