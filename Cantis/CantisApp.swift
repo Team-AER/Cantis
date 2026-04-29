@@ -25,8 +25,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
     private func applyApplicationIcon() {
         let iconURLs = [
-            Bundle.module.url(forResource: "AppIcon", withExtension: "icns"),
-            Bundle.module.url(forResource: "AppIconSource", withExtension: "png")
+            Bundle.main.url(forResource: "AppIcon", withExtension: "icns"),
+            Bundle.main.url(forResource: "AppIconSource", withExtension: "png")
         ].compactMap(\.self)
 
         guard let icon = iconURLs.lazy.compactMap({ NSImage(contentsOf: $0) }).first else {

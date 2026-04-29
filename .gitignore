@@ -4,10 +4,12 @@
 # Swift / Xcode build output
 .build/
 .swiftpm/
+build/
 DerivedData/
 *.xcodeproj/xcuserdata/
 *.xcuserdatad/
 *.xcuserstate
+*.xcarchive
 *.swp
 
 # Editor / runtime noise

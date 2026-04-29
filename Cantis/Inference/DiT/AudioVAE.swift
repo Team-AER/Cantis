@@ -1,5 +1,5 @@
-import MLX
-import MLXNN
+@preconcurrency import MLX
+@preconcurrency import MLXNN
 import Foundation
 
 // MARK: - Protocol

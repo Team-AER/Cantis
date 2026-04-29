@@ -1,5 +1,5 @@
-import MLX
-import MLXNN
+@preconcurrency import MLX
+@preconcurrency import MLXNN
 import Foundation
 
 // Qwen3-Embedding-0.6B — bidirectional encoder used by ACE-Step v1.5 Turbo

@@ -1,6 +1,7 @@
 import Foundation
-import MLX
-import MLXRandom
+@preconcurrency import MLX
+@preconcurrency import MLXNN
+@preconcurrency import MLXRandom
 import Observation
 
 // MARK: - Model State

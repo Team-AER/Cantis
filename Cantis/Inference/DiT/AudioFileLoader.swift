@@ -1,5 +1,5 @@
 @preconcurrency import AVFoundation
-import MLX
+@preconcurrency import MLX
 import Foundation
 
 enum AudioFileLoaderError: Error, CustomStringConvertible {

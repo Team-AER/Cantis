@@ -13,9 +13,9 @@ final class PresetService {
         let existing = try context.fetchCount(FetchDescriptor<Preset>())
         guard existing == 0 else { return }
 
-        guard let url = Bundle.module.url(forResource: "starter_presets", withExtension: "json", subdirectory: "Presets") else {
-            return
-        }
+        let url = Bundle.main.url(forResource: "starter_presets", withExtension: "json", subdirectory: "Presets")
+            ?? Bundle.main.url(forResource: "starter_presets", withExtension: "json")
+        guard let url else { return }
 
         let data = try Data(contentsOf: url)
         let presets = try JSONDecoder().decode([PresetSeed].self, from: data)
