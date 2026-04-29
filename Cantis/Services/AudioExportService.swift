@@ -202,7 +202,7 @@ final class AudioExportService: Sendable {
         assetWriter.startSession(atSourceTime: .zero)
 
         return try await withCheckedThrowingContinuation { continuation in
-            writerInput.requestMediaDataWhenReady(on: DispatchQueue(label: "com.cantis.export")) {
+            writerInput.requestMediaDataWhenReady(on: DispatchQueue(label: "app.aer.cantis.export")) {
                 while writerInput.isReadyForMoreMediaData {
                     if let sampleBuffer = readerOutput.copyNextSampleBuffer() {
                         writerInput.append(sampleBuffer)

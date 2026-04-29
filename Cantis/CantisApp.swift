@@ -9,13 +9,32 @@ import SwiftUI
 final class AppDelegate: NSObject, NSApplicationDelegate {
     var onTerminate: (() -> Void)?
 
+    func applicationWillFinishLaunching(_ notification: Notification) {
+        applyApplicationIcon()
+    }
+
     func applicationDidFinishLaunching(_ notification: Notification) {
         NSApplication.shared.setActivationPolicy(.regular)
+        applyApplicationIcon()
         NSApplication.shared.activate(ignoringOtherApps: true)
     }
 
     func applicationWillTerminate(_ notification: Notification) {
         onTerminate?()
+    }
+
+    private func applyApplicationIcon() {
+        let iconURLs = [
+            Bundle.module.url(forResource: "AppIcon", withExtension: "icns"),
+            Bundle.module.url(forResource: "AppIconSource", withExtension: "png")
+        ].compactMap(\.self)
+
+        guard let icon = iconURLs.lazy.compactMap({ NSImage(contentsOf: $0) }).first else {
+            return
+        }
+
+        NSApplication.shared.applicationIconImage = icon
+        NSApplication.shared.dockTile.display()
     }
 }
 

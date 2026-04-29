@@ -19,11 +19,25 @@ struct LyricEditorView: View {
                 }
 
             if settings.ditVariant.usesCFGDistillation && !lyrics.isEmpty {
-                Text("Turbo models may skip later verses — switch to SFT for closer lyric following.")
-                    .font(.caption2)
-                    .foregroundStyle(.secondary)
-                    .frame(maxWidth: .infinity, alignment: .leading)
-                    .padding(.top, 2)
+                Label {
+                    Text("Turbo models may skip later verses — switch to SFT for closer lyric following.")
+                        .font(.caption.weight(.medium))
+                        .foregroundStyle(.primary)
+                } icon: {
+                    Image(systemName: "exclamationmark.triangle.fill")
+                        .foregroundStyle(.orange)
+                }
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .padding(8)
+                .background(
+                    RoundedRectangle(cornerRadius: 6, style: .continuous)
+                        .fill(Color.orange.opacity(0.15))
+                )
+                .overlay(
+                    RoundedRectangle(cornerRadius: 6, style: .continuous)
+                        .strokeBorder(Color.orange.opacity(0.5), lineWidth: 1)
+                )
+                .padding(.top, 4)
             }
         }
     }
