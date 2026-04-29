@@ -149,7 +149,7 @@ struct ModelDownloadSheet: View {
             Label("All weight files are present on disk.", systemImage: "checkmark.circle")
                 .foregroundStyle(.green)
                 .font(.callout)
-            Text("Weights stored in ~/Library/Application Support/Auralux/Models/\(variant.mlxDirectoryName)/")
+            Text("Weights stored in ~/Library/Application Support/Cantis/Models/\(variant.mlxDirectoryName)/")
                 .font(.caption2)
                 .foregroundStyle(.tertiary)
                 .textSelection(.enabled)

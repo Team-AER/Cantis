@@ -73,7 +73,7 @@ final class AppLogger {
     /// Minimum level that is actually recorded.
     var minimumLevel: LogLevel = .debug
 
-    private let osLog = OSLog(subsystem: "com.auralux.app", category: "AppLogger")
+    private let osLog = OSLog(subsystem: "com.cantis.app", category: "AppLogger")
 
     private init() {}
 

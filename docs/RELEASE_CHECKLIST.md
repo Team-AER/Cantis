@@ -11,7 +11,7 @@
 
 ## Engine and Inference
 
-- [ ] First-launch onboarding (`SetupView`) downloads the Turbo variant cleanly on a fresh `~/Library/Application Support/Auralux/Models/` directory.
+- [ ] First-launch onboarding (`SetupView`) downloads the Turbo variant cleanly on a fresh `~/Library/Application Support/Cantis/Models/` directory.
 - [ ] Variant switching downloads the SFT and Base bundles and correctly creates symlinks into the Turbo directory for `lm/`, `vae/`, and `text/`.
 - [ ] `tools/convert_weights.py --variant xl-turbo` produces a directory the engine can load.
 - [ ] End-to-end text-to-music generation succeeds in each implemented mode (`text2music`, `cover`, `repaint`, `extract`).
@@ -53,4 +53,4 @@
 
 - [ ] Tag/version prepared.
 - [ ] Release notes summarize user-visible changes and known limitations.
-- [ ] App version string updated in `AuraluxApp.swift` (`applicationVersion`).
+- [ ] App version string updated in `CantisApp.swift` (`applicationVersion`).

@@ -2,7 +2,7 @@ import XCTest
 import MLX
 import MLXNN
 import MLXRandom
-@testable import Auralux
+@testable import Cantis
 
 /// Shape tests for ACE-Step v1.5 Turbo DiT and related components.
 /// Uses a mini config (hiddenSize=64, 2 layers) for fast execution without real weights.

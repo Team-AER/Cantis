@@ -2,7 +2,7 @@
 
 ## Overview
 
-Auralux is a single-process, fully native macOS application. The SwiftUI app and the inference engine run in the same Swift binary; there is no Python backend, no IPC layer, and no HTTP server. Inference runs on Apple Silicon via [mlx-swift](https://github.com/ml-explore/mlx-swift).
+Cantis is a single-process, fully native macOS application. The SwiftUI app and the inference engine run in the same Swift binary; there is no Python backend, no IPC layer, and no HTTP server. Inference runs on Apple Silicon via [mlx-swift](https://github.com/ml-explore/mlx-swift).
 
 ```
 ┌──────────────────────────────────────────────────┐
@@ -26,9 +26,9 @@ Auralux is a single-process, fully native macOS application. The SwiftUI app and
 
 ## High-Level Components
 
-- **`Auralux/`** (Swift) — UI, state management, audio playback/export, persistence, and the entire inference stack.
-- **`Auralux/Inference/`** — native Swift port of the ACE-Step v1.5 pipeline running on mlx-swift.
-- **`AuraluxTests/`** — unit tests plus MLX integration suites (Xcode-only).
+- **`Cantis/`** (Swift) — UI, state management, audio playback/export, persistence, and the entire inference stack.
+- **`Cantis/Inference/`** — native Swift port of the ACE-Step v1.5 pipeline running on mlx-swift.
+- **`CantisTests/`** — unit tests plus MLX integration suites (Xcode-only).
 - **`tools/convert_weights.py`** — one-shot PyTorch → MLX weight converter. Used to produce the XL variants and any custom checkpoints that aren't already published as MLX safetensors.
 
 ## Swift App Structure
@@ -42,7 +42,7 @@ Auralux is a single-process, fully native macOS application. The SwiftUI app and
 - `Settings/` — `SettingsView`, `ModelSettingsView`
 - `Sidebar/` — navigation, presets, recent tracks
 - `AudioToAudio/` — audio import (cover / repaint / extract sources) and LoRA management
-- `LogViewerView` — opened via `Window("Auralux Logs", id: "log-viewer")`
+- `LogViewerView` — opened via `Window("Cantis Logs", id: "log-viewer")`
 
 ### ViewModels
 
@@ -56,7 +56,7 @@ Auralux is a single-process, fully native macOS application. The SwiftUI app and
 
 ### Services
 
-Injected via `@Environment` from `AuraluxApp.init()`:
+Injected via `@Environment` from `CantisApp.init()`:
 
 - **`AudioPlayerService`** — `AVAudioEngine` wrapper, waveform data, real-time FFT
 - **`AudioExportService`** — audio export via `AVAssetWriter`. WAV is a passthrough copy; AAC and ALAC are transcoded to `.m4a`. FLAC and MP3 are intentionally rejected with `AudioExportError.unsupported` because `AVAssetWriter` does not support them.
@@ -91,7 +91,7 @@ SwiftData `@Model` types and request DTOs:
 
 ## Inference Engine
 
-`Auralux/Inference/NativeInferenceEngine.swift` is the central coordinator. It is `@MainActor @Observable`, owns weights for the active `DiTVariant`, and exposes a single `generate(request:)` API that returns an `AsyncThrowingStream<GenerationProgress, Error>`.
+`Cantis/Inference/NativeInferenceEngine.swift` is the central coordinator. It is `@MainActor @Observable`, owns weights for the active `DiTVariant`, and exposes a single `generate(request:)` API that returns an `AsyncThrowingStream<GenerationProgress, Error>`.
 
 ### Sub-components
 
@@ -183,12 +183,12 @@ notDownloaded ──▶ downloading(progress) ──▶ downloaded ──▶ loa
    - **DiT sampler** → latent of shape `[B, C, T_latent]`
    - **DC-HiFi-GAN VAE** → 48 kHz audio
 4. Progress is streamed via `AsyncThrowingStream<GenerationProgress, Error>` (`preparing` → `step(current, total)` → `saving` → `completed(audioURL)`).
-5. The output is written to `~/Library/Application Support/Auralux/Generated/` and persisted to SwiftData via `HistoryService`.
+5. The output is written to `~/Library/Application Support/Cantis/Generated/` and persisted to SwiftData via `HistoryService`.
 6. The track appears in history and can be played back in `PlayerView`.
 
 ## Model Storage and Downloads
 
-- Root: `~/Library/Application Support/Auralux/Models/<variant-directory>/`
+- Root: `~/Library/Application Support/Cantis/Models/<variant-directory>/`
 - Variant directory names come from `DiTVariant.mlxDirectoryName` (e.g. `ace-step-v1.5-mlx`, `ace-step-v1.5-sft-mlx`).
 - Each variant must contain:
   ```
@@ -213,17 +213,17 @@ SwiftData stores all structured data:
 - **`Preset`** — saved generation parameter configurations
 - **`Tag`** — reusable tag library with usage counts
 
-Audio files are stored in `~/Library/Application Support/Auralux/Generated/`. The `ModelContainer` is created once in `AuraluxApp.init()` and injected via `.modelContainer()`.
+Audio files are stored in `~/Library/Application Support/Cantis/Generated/`. The `ModelContainer` is created once in `CantisApp.init()` and injected via `.modelContainer()`.
 
 ## App Entry Point
 
-`AuraluxApp.swift` is the composition root:
+`CantisApp.swift` is the composition root:
 
 1. Caps the MLX freed-buffer pool (`MLX.Memory.cacheLimit`) at 1 GB (512 MB in low-memory mode). MLX otherwise retains every buffer it has allocated, growing resident memory to the high-water mark of the union of all phases (weight load + DiT activations + VAE decode).
 2. Constructs `NativeInferenceEngine` and the ViewModels (`Generation`, `History`, `Player`, `Settings`, `Sidebar`).
 3. Initializes the SwiftData `ModelContainer` for `GeneratedTrack`, `Preset`, `Tag`.
 4. Injects everything into the SwiftUI environment.
-5. Defines the main `WindowGroup` and the `Window("Auralux Logs", id: "log-viewer")` log viewer.
+5. Defines the main `WindowGroup` and the `Window("Cantis Logs", id: "log-viewer")` log viewer.
 6. Includes an `AppDelegate` that promotes the SPM executable to a regular GUI application (menu bar, Dock icon) and forwards `applicationWillTerminate` to `engine.shutdown()` and the player service.
 
 ## Sandboxing and Distribution

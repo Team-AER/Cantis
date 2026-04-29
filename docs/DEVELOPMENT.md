@@ -12,17 +12,17 @@
 
 ### From Xcode
 
-Open `Package.swift` in Xcode, select the `Auralux` executable target, and run (Cmd+R).
+Open `Package.swift` in Xcode, select the `Cantis` executable target, and run (Cmd+R).
 
 ### From the terminal
 
 ```bash
-swift run Auralux
+swift run Cantis
 ```
 
 On first launch the in-app onboarding overlay (`SetupView`) will:
 
-1. Check whether the active `DiTVariant` is already present in `~/Library/Application Support/Auralux/Models/`.
+1. Check whether the active `DiTVariant` is already present in `~/Library/Application Support/Cantis/Models/`.
 2. If not, download the variant's manifest from HuggingFace via `ModelDownloader` (sequential, resumable, weighted progress).
 3. Load weights into MLX on a detached task and transition `modelState` → `ready`.
 
@@ -36,7 +36,7 @@ The Turbo, SFT, and Base variants are pre-converted and download from HuggingFac
 python tools/convert_weights.py --variant xl-turbo
 ```
 
-Output is written into `~/Library/Application Support/Auralux/Models/<variant-directory>/`. See `tools/convert_weights.py` for flags and `modeling_acestep_v15_turbo.py` for the reference PyTorch model used by the converter.
+Output is written into `~/Library/Application Support/Cantis/Models/<variant-directory>/`. See `tools/convert_weights.py` for flags and `modeling_acestep_v15_turbo.py` for the reference PyTorch model used by the converter.
 
 ## Running Tests
 
@@ -77,8 +77,8 @@ There are no environment variables for runtime configuration — everything is i
 ## Project Structure
 
 ```
-Auralux/
-├── AuraluxApp.swift                     # App entry point, MLX cache, ModelContainer, env injection
+Cantis/
+├── CantisApp.swift                     # App entry point, MLX cache, ModelContainer, env injection
 ├── Info.plist                           # App metadata
 ├── Entitlements.plist                   # App Sandbox + network/files/audio entitlements
 │
@@ -172,7 +172,7 @@ Auralux/
 │
 └── Resources/
 
-AuraluxTests/
+CantisTests/
 ├── ModelTests.swift
 ├── ServiceTests.swift
 ├── ViewModelTests.swift
@@ -196,15 +196,15 @@ swift test --skip 'ACEStepDiTTests|ACEStepLMTests|FeasibilityProbeTests|Qwen3Con
 python3 -m py_compile modeling_acestep_v15_turbo.py tools/convert_weights.py
 ```
 
-Run the MLX integration suites from Xcode if your change touches `Auralux/Inference/`.
+Run the MLX integration suites from Xcode if your change touches `Cantis/Inference/`.
 
 ## Troubleshooting
 
-- **Setup overlay sticks at "downloading"**: check the Auralux log window (Window > Auralux Logs) for HTTP errors. Downloads are resumable — quit and re-launch and the engine will pick up where it left off.
-- **`weightsNotFound` error after download**: confirm every file listed in `NativeInferenceEngine.isDownloaded(_:)` is present under `~/Library/Application Support/Auralux/Models/<variant>/`. Non-turbo variants symlink into the turbo directory; if you deleted the turbo bundle, re-download it.
+- **Setup overlay sticks at "downloading"**: check the Cantis log window (Window > Cantis Logs) for HTTP errors. Downloads are resumable — quit and re-launch and the engine will pick up where it left off.
+- **`weightsNotFound` error after download**: confirm every file listed in `NativeInferenceEngine.isDownloaded(_:)` is present under `~/Library/Application Support/Cantis/Models/<variant>/`. Non-turbo variants symlink into the turbo directory; if you deleted the turbo bundle, re-download it.
 - **`Run python tools/convert_weights.py …` error in Settings**: you selected an XL variant. Run the converter once and re-launch.
 - **Resident memory grows across generations**: enable Settings → Low-memory mode; it halves the MLX cache limit. Also confirm "Load 5 Hz LM" is off unless you actually need it (~1.2 GB extra).
-- **App not appearing in Dock**: the SPM executable relies on `AppDelegate` to set `setActivationPolicy(.regular)`. Make sure `AuraluxApp.swift` still uses `@NSApplicationDelegateAdaptor`.
+- **App not appearing in Dock**: the SPM executable relies on `AppDelegate` to set `setActivationPolicy(.regular)`. Make sure `CantisApp.swift` still uses `@NSApplicationDelegateAdaptor`.
 - **`swift build` complains about SDK version**: you need Xcode 26 or the macOS 26 SDK. CI runs on `macos-26` for the same reason.
 
 ## Coding Expectations

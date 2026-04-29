@@ -1,5 +1,5 @@
 import XCTest
-@testable import Auralux
+@testable import Cantis
 
 final class ModelTests: XCTestCase {
 

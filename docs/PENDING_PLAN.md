@@ -1,8 +1,8 @@
-# Auralux — Pending Items Plan
+# Cantis — Pending Items Plan
 
 ## Goal
 
-Auralux is a single-process, fully native macOS app: launch it, download weights once, generate music — entirely on-device. The architectural plumbing (Python subprocess, HTTP server, IPC) is gone. The remaining work is polish, distribution, and feature breadth.
+Cantis is a single-process, fully native macOS app: launch it, download weights once, generate music — entirely on-device. The architectural plumbing (Python subprocess, HTTP server, IPC) is gone. The remaining work is polish, distribution, and feature breadth.
 
 ### Distribution Strategy
 
@@ -19,7 +19,7 @@ The App Sandbox is enabled. Because all inference is now in-process via mlx-swif
 
 ### Native Swift inference engine
 
-`Auralux/Inference/NativeInferenceEngine.swift` plus `DiT/`, `LM/`, `Text/` subtrees implement the full ACE-Step v1.5 pipeline on mlx-swift:
+`Cantis/Inference/NativeInferenceEngine.swift` plus `DiT/`, `LM/`, `Text/` subtrees implement the full ACE-Step v1.5 pipeline on mlx-swift:
 
 - ACEStepDiT (2B params) with `TurboSampler` (8-step CFG-distilled) and `CFGSampler` (60-step twin-pass)
 - DC-HiFi-GAN VAE for latent → 48 kHz audio
@@ -40,7 +40,7 @@ State machine: `notDownloaded → downloading → downloaded → loading → rea
 
 ### App shell and UX
 
-- `AuraluxApp` configures `MLX.Memory.cacheLimit`, builds the SwiftData `ModelContainer`, injects services via `@Environment`
+- `CantisApp` configures `MLX.Memory.cacheLimit`, builds the SwiftData `ModelContainer`, injects services via `@Environment`
 - `AppDelegate` promotes the SPM executable to a regular GUI app and forwards termination
 - `EngineStatusView` toolbar badge reflects `modelState`
 - Generation, playback, audio export (WAV / AAC / ALAC), history, presets, log viewer
@@ -89,7 +89,7 @@ Sandbox enabled with `network.client`, `files.user-selected.read-write`, and `de
 | Stem export | Not started | Per-track export |
 | Batch generation with seed arrays | Not started | Needs a job queue (removed during cleanup) plus batch UI |
 | Keyboard shortcuts coverage | Partial | Audit and document |
-| URL scheme handler (`auralux://generate?...`) | Not started | Inter-app integration |
+| URL scheme handler (`cantis://generate?...`) | Not started | Inter-app integration |
 | Performance profiling pass | Not started | Instruments: GPU, Memory, Energy |
 
 ---
@@ -98,7 +98,7 @@ Sandbox enabled with `network.client`, `files.user-selected.read-write`, and `de
 
 ```
 ┌────────────────────────────────────────────────────┐
-│                  AuraluxApp.swift                   │
+│                  CantisApp.swift                   │
 │  Builds NativeInferenceEngine + ViewModels +       │
 │  ModelContainer; injects via @Environment          │
 ├─────────────┬──────────────────────────────────────┤

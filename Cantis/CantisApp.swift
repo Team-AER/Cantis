@@ -20,7 +20,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 }
 
 @main
-struct AuraluxApp: App {
+struct CantisApp: App {
     @NSApplicationDelegateAdaptor(AppDelegate.self) var appDelegate
 
     @State private var sidebarViewModel = SidebarViewModel()
@@ -62,7 +62,7 @@ struct AuraluxApp: App {
             AppLogger.shared.error("Failed to initialize SwiftData container: \(error)", category: .app)
         }
 
-        AppLogger.shared.info("Auralux launched", category: .app)
+        AppLogger.shared.info("Cantis launched", category: .app)
     }
 
     var body: some Scene {
@@ -91,7 +91,7 @@ struct AuraluxApp: App {
         .defaultSize(width: 1280, height: 840)
         .commands {
             CommandGroup(replacing: .appInfo) {
-                Button("About Auralux") {
+                Button("About Cantis") {
                     NSApplication.shared.orderFrontStandardAboutPanel(options: [
                         NSApplication.AboutPanelOptionKey.applicationName: AppConstants.appName,
                         NSApplication.AboutPanelOptionKey.applicationVersion: AppConstants.appVersion,
@@ -111,9 +111,9 @@ private struct StorageInitErrorView: View {
             Image(systemName: "exclamationmark.triangle.fill")
                 .font(.system(size: 48))
                 .foregroundStyle(.orange)
-            Text("Auralux can't start")
+            Text("Cantis can't start")
                 .font(.title2.bold())
-            Text("The on-disk library couldn't be opened. Quit Auralux and try again, or remove the app's container if the problem persists.")
+            Text("The on-disk library couldn't be opened. Quit Cantis and try again, or remove the app's container if the problem persists.")
                 .multilineTextAlignment(.center)
                 .foregroundStyle(.secondary)
                 .frame(maxWidth: 480)

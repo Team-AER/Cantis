@@ -1,6 +1,6 @@
 import XCTest
 import MLX
-@testable import Auralux
+@testable import Cantis
 
 /// Unit tests for NativeInferenceEngine — verify state machine and
 /// error paths without real model weights.
@@ -60,7 +60,7 @@ final class NativeInferenceEngineTests: XCTestCase {
     func testMlxModelDirectoryIsInsideAppSupport() {
         let engine = NativeInferenceEngine()
         let modelDirectory = engine.mlxModelDirectory(for: .turbo)
-        XCTAssertTrue(modelDirectory.path.contains("Auralux"))
+        XCTAssertTrue(modelDirectory.path.contains("Cantis"))
         XCTAssertTrue(modelDirectory.lastPathComponent == "ace-step-v1.5-mlx")
     }
 

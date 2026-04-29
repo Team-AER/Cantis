@@ -1,6 +1,6 @@
 import AVFoundation
 import XCTest
-@testable import Auralux
+@testable import Cantis
 
 final class AudioExportServiceTests: XCTestCase {
 
@@ -13,7 +13,7 @@ final class AudioExportServiceTests: XCTestCase {
         service = AudioExportService()
         sourceURL = try AudioFixtures.sineWave(duration: 0.5)
         outputDir = FileManager.default.temporaryDirectory
-            .appendingPathComponent("AuraluxExportTests-\(UUID().uuidString)", isDirectory: true)
+            .appendingPathComponent("CantisExportTests-\(UUID().uuidString)", isDirectory: true)
         try FileManager.default.createDirectory(at: outputDir, withIntermediateDirectories: true)
     }
 

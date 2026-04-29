@@ -64,7 +64,7 @@ struct SetupView: View {
                 .font(.system(size: 32))
                 .foregroundStyle(.tint)
 
-            Text("Setting Up Auralux")
+            Text("Setting Up Cantis")
                 .font(.headline)
 
             Text("AI Music Generation on Apple Silicon")

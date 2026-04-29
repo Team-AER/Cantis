@@ -1,5 +1,5 @@
 import XCTest
-@testable import Auralux
+@testable import Cantis
 
 @MainActor
 final class PlaybackDiagnosticsTests: XCTestCase {
@@ -107,7 +107,7 @@ final class PlaybackDiagnosticsTests: XCTestCase {
 
     private func makeTempDirectory() -> URL {
         let url = FileManager.default.temporaryDirectory
-            .appendingPathComponent("AuraluxPlaybackDiagTests")
+            .appendingPathComponent("CantisPlaybackDiagTests")
             .appendingPathComponent(UUID().uuidString, isDirectory: true)
         try? FileManager.default.createDirectory(at: url, withIntermediateDirectories: true)
         return url

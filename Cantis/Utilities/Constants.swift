@@ -1,7 +1,7 @@
 import Foundation
 
 enum AppConstants {
-    static let appName = "Auralux"
+    static let appName = "Cantis"
     static let minimumWindowWidth: Double = 1024
     static let minimumWindowHeight: Double = 768
 

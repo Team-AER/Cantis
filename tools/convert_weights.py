@@ -8,7 +8,7 @@ Usage:
     python tools/convert_weights.py [--output-dir DIR] [--dtype float16|float32]
     python tools/convert_weights.py --inspect-only
 
-Default output: ~/Library/Application Support/Auralux/Models/ace-step-v1.5-mlx/
+Default output: ~/Library/Application Support/Cantis/Models/ace-step-v1.5-mlx/
 """
 
 from __future__ import annotations
@@ -890,7 +890,7 @@ def validate_output(output_dir: Path) -> bool:
 # Main
 # ---------------------------------------------------------------------------
 
-_MODELS_DIR = Path.home() / "Library" / "Application Support" / "Auralux" / "Models"
+_MODELS_DIR = Path.home() / "Library" / "Application Support" / "Cantis" / "Models"
 
 # dit_repo:    HuggingFace repo ID containing the DiT checkpoint.
 # dit_subdir:  Subdirectory within the repo for non-standalone variants (e.g. turbo
@@ -990,7 +990,7 @@ def main() -> int:
     parser.add_argument(
         "--output-dir",
         default=None,
-        help="Output directory (default: ~/Library/Application Support/Auralux/Models/<variant>/)",
+        help="Output directory (default: ~/Library/Application Support/Cantis/Models/<variant>/)",
     )
     parser.add_argument(
         "--dtype",
@@ -1030,8 +1030,8 @@ def main() -> int:
     )
     parser.add_argument(
         "--cache-dir",
-        default=str(Path.home() / ".cache" / "auralux-weights"),
-        help="Directory for raw HuggingFace downloads (default: ~/.cache/auralux-weights)",
+        default=str(Path.home() / ".cache" / "cantis-weights"),
+        help="Directory for raw HuggingFace downloads (default: ~/.cache/cantis-weights)",
     )
     args = parser.parse_args()
 
@@ -1217,7 +1217,7 @@ def main() -> int:
         print(f"\n✓ All done → {out_dir}")
         if not is_turbo:
             print(f"  Shared components are symlinked from {turbo_dir}")
-        print(f"  Launch Auralux and select the '{variant}' DiT variant in Settings.")
+        print(f"  Launch Cantis and select the '{variant}' DiT variant in Settings.")
         return 0
     else:
         print(f"\n✗ Conversion had errors. See above.", file=sys.stderr)

@@ -1,6 +1,6 @@
 import AVFoundation
 import XCTest
-@testable import Auralux
+@testable import Cantis
 
 @MainActor
 final class AudioPlayerServiceTests: XCTestCase {

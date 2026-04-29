@@ -2,7 +2,7 @@ import XCTest
 import MLX
 import MLXNN
 import MLXRandom
-@testable import Auralux
+@testable import Cantis
 
 /// Phase 2 shape tests for the ACE-Step 5Hz Language Model (Qwen2-style GQA).
 /// These run without real weights — they verify architecture dimensions only.

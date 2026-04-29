@@ -73,7 +73,7 @@ struct ContentView: View {
                 UserDefaults.standard.set(true, forKey: Self.lowRAMWarningDismissedKey)
             }
         } message: {
-            Text("Auralux works best on Macs with 32 GB or more RAM. On this machine generation may swap heavily or fail under load. Low-memory mode is enabled by default — you can adjust it in Settings.")
+            Text("Cantis works best on Macs with 32 GB or more RAM. On this machine generation may swap heavily or fail under load. Low-memory mode is enabled by default — you can adjust it in Settings.")
         }
     }
 
@@ -134,7 +134,7 @@ struct ContentView: View {
                             SettingsView()
                         }
                     }
-                    .navigationTitle(sidebarViewModel.selectedSection?.title ?? "Auralux")
+                    .navigationTitle(sidebarViewModel.selectedSection?.title ?? "Cantis")
                     .frame(maxWidth: .infinity)
 
                     if sidebarViewModel.selectedSection != .settings {

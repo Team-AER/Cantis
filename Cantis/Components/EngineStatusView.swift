@@ -128,7 +128,7 @@ struct EngineStatusView: View {
                     Label("Weights not found", systemImage: "exclamationmark.triangle")
                         .font(.callout)
                         .foregroundStyle(.orange)
-                    Text("Open Auralux and let it download model weights automatically.")
+                    Text("Open Cantis and let it download model weights automatically.")
                         .font(.caption)
                         .foregroundStyle(.secondary)
                 }

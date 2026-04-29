@@ -129,7 +129,7 @@ final class SettingsViewModel {
         } else if AppConstants.isLowMemoryMachine {
             // First launch on a ≤ 16 GiB Mac — opt them in by default. Setting
             // the property triggers `didSet`, which persists the value, so
-            // `AuraluxApp.init()` will read it on the next launch as well.
+            // `CantisApp.init()` will read it on the next launch as well.
             lowMemoryMode = true
         }
         if defaults.object(forKey: Keys.useLM) != nil {

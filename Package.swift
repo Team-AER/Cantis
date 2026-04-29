@@ -2,12 +2,12 @@
 import PackageDescription
 
 let package = Package(
-    name: "Auralux",
+    name: "Cantis",
     platforms: [
         .macOS(.v26)
     ],
     products: [
-        .executable(name: "Auralux", targets: ["Auralux"])
+        .executable(name: "Cantis", targets: ["Cantis"])
     ],
     dependencies: [
         .package(url: "https://github.com/apple/swift-collections.git", from: "1.1.0"),
@@ -16,7 +16,7 @@ let package = Package(
     ],
     targets: [
         .executableTarget(
-            name: "Auralux",
+            name: "Cantis",
             dependencies: [
                 .product(name: "Collections", package: "swift-collections"),
                 .product(name: "Shimmer", package: "SwiftUI-Shimmer"),
@@ -24,7 +24,7 @@ let package = Package(
                 .product(name: "MLXNN", package: "mlx-swift"),
                 .product(name: "MLXRandom", package: "mlx-swift")
             ],
-            path: "Auralux",
+            path: "Cantis",
             exclude: [
                 "Info.plist",
                 "Entitlements.plist"
@@ -34,14 +34,14 @@ let package = Package(
             ]
         ),
         .testTarget(
-            name: "AuraluxTests",
+            name: "CantisTests",
             dependencies: [
-                "Auralux",
+                "Cantis",
                 .product(name: "MLX", package: "mlx-swift"),
                 .product(name: "MLXNN", package: "mlx-swift"),
                 .product(name: "MLXRandom", package: "mlx-swift")
             ],
-            path: "AuraluxTests"
+            path: "CantisTests"
         )
     ]
 )

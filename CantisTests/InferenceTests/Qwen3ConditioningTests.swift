@@ -2,7 +2,7 @@ import XCTest
 import MLX
 import MLXNN
 import MLXRandom
-@testable import Auralux
+@testable import Cantis
 
 /// Tests for the Qwen3-Embedding text/lyric conditioning pipeline.
 ///

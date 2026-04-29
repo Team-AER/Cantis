@@ -1,4 +1,4 @@
-# Contributing to Auralux
+# Contributing to Cantis
 
 Thanks for contributing.
 
@@ -15,14 +15,14 @@ Thanks for contributing.
 2. Clone the repository.
 3. Build and run:
    ```bash
-   swift run Auralux
+   swift run Cantis
    ```
-   On first launch the in-app onboarding overlay downloads the active DiT variant's weights from HuggingFace into `~/Library/Application Support/Auralux/Models/`.
+   On first launch the in-app onboarding overlay downloads the active DiT variant's weights from HuggingFace into `~/Library/Application Support/Cantis/Models/`.
 4. Run tests:
    ```bash
    swift test
    ```
-   In CI, MLX integration suites are skipped (they require local Metal / GPU); they should be run from Xcode when touching `Auralux/Inference/`.
+   In CI, MLX integration suites are skipped (they require local Metal / GPU); they should be run from Xcode when touching `Cantis/Inference/`.
 
 See [docs/DEVELOPMENT.md](docs/DEVELOPMENT.md) for the full development guide, troubleshooting, and project structure.
 
@@ -36,7 +36,7 @@ See [docs/DEVELOPMENT.md](docs/DEVELOPMENT.md) for the full development guide, t
 
 - [ ] Tests added/updated for changed behavior.
 - [ ] `swift build` and the CI-safe `swift test` slice pass (`--skip 'ACEStepDiTTests|ACEStepLMTests|FeasibilityProbeTests|Qwen3ConditioningTests|Qwen3RealWeightsTests'`).
-- [ ] If `Auralux/Inference/` was touched, MLX integration suites pass locally in Xcode against real weights.
+- [ ] If `Cantis/Inference/` was touched, MLX integration suites pass locally in Xcode against real weights.
 - [ ] `python3 -m py_compile modeling_acestep_v15_turbo.py tools/convert_weights.py` passes (if the converter or reference model was modified).
 - [ ] Docs updated for user-visible changes.
 - [ ] No secrets, credentials, or personal paths are introduced.

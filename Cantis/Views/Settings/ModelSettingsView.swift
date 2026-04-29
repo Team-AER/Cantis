@@ -453,7 +453,7 @@ struct ModelSettingsView: View {
             }
         }
 
-        Text("~/Library/Application Support/Auralux/Models/")
+        Text("~/Library/Application Support/Cantis/Models/")
             .font(.caption2)
             .foregroundStyle(.tertiary)
             .textSelection(.enabled)

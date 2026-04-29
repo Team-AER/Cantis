@@ -25,7 +25,7 @@ enum AudioFixtures {
         }
 
         let url = FileManager.default.temporaryDirectory
-            .appendingPathComponent("auralux-test-\(UUID().uuidString).wav")
+            .appendingPathComponent("cantis-test-\(UUID().uuidString).wav")
         let file = try AVAudioFile(forWriting: url, settings: format.settings)
         try file.write(from: buffer)
         return url

@@ -1,6 +1,6 @@
-# Auralux
+# Cantis
 
-Auralux is a native macOS application for AI music generation. It runs ACE-Step v1.5 entirely on Apple Silicon — fully native Swift, no Python, no servers, no cloud. Generate music from text prompts and lyrics, with playback, history, and multi-format export.
+Cantis is a native macOS application for AI music generation. It runs ACE-Step v1.5 entirely on Apple Silicon — fully native Swift, no Python, no servers, no cloud. Generate music from text prompts and lyrics, with playback, history, and multi-format export.
 
 ## Features
 
@@ -31,12 +31,12 @@ Auralux is a native macOS application for AI music generation. It runs ACE-Step 
 ## Quick Start
 
 ```bash
-swift run Auralux
+swift run Cantis
 ```
 
-Or open `Package.swift` in Xcode and run the `Auralux` target.
+Or open `Package.swift` in Xcode and run the `Cantis` target.
 
-On first launch the in-app onboarding panel downloads the converted MLX weights from HuggingFace (`Team-AER/ace-step-v1.5-mlx`) into `~/Library/Application Support/Auralux/Models/`. After that the app loads weights into memory on demand and generation runs entirely locally.
+On first launch the in-app onboarding panel downloads the converted MLX weights from HuggingFace (`Team-AER/ace-step-v1.5-mlx`) into `~/Library/Application Support/Cantis/Models/`. After that the app loads weights into memory on demand and generation runs entirely locally.
 
 ### Optional: convert XL or custom weights
 
@@ -46,7 +46,7 @@ The app downloads the Turbo, SFT, and Base variants directly. The XL variants an
 python tools/convert_weights.py --variant xl-turbo
 ```
 
-Converted weights are written into `~/Library/Application Support/Auralux/Models/<variant>/`.
+Converted weights are written into `~/Library/Application Support/Cantis/Models/<variant>/`.
 
 ## Running Tests
 
@@ -59,8 +59,8 @@ CI runs the deterministic Model / Service / ViewModel suites. The MLX inference 
 ## Project Layout
 
 ```
-Auralux/                    # SwiftUI app
-├── AuraluxApp.swift          # @main, MLX cache config, ModelContainer, env injection
+Cantis/                    # SwiftUI app
+├── CantisApp.swift          # @main, MLX cache config, ModelContainer, env injection
 ├── Inference/                # Native Swift inference engine
 │   ├── NativeInferenceEngine.swift   # Coordinator: state, download, load, generate
 │   ├── DiT/                          # ACE-Step DiT, samplers, VAE, audio tokenizer
@@ -73,7 +73,7 @@ Auralux/                    # SwiftUI app
 ├── Components/               # TagChip, SliderControl, EngineStatusView, AudioDropZone, ProgressOverlay
 └── Utilities/                # AppLogger, Constants, AudioFFT, FileUtilities
 
-AuraluxTests/               # Unit + MLX integration tests
+CantisTests/               # Unit + MLX integration tests
 docs/                       # Architecture, development, release docs
 tools/convert_weights.py    # PyTorch → MLX weight converter (XL / custom variants)
 modeling_acestep_v15_turbo.py # Reference PyTorch model (used by the converter only)

@@ -1,7 +1,7 @@
 import XCTest
 import MLX
 import MLXNN
-@testable import Auralux
+@testable import Cantis
 
 /// Integration tests that load the *actual* converted Qwen3-Embedding-0.6B
 /// weights and run forward passes. Skipped when weights are not present.

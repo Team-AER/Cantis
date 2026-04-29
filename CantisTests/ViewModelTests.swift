@@ -1,6 +1,6 @@
 import SwiftData
 import XCTest
-@testable import Auralux
+@testable import Cantis
 
 @MainActor
 final class ViewModelTests: XCTestCase {

@@ -2,7 +2,7 @@ import Foundation
 import Observation
 
 /// Persists the list of user-added custom models to a JSON file under
-/// `~/Library/Application Support/Auralux/CustomModels/registry.json`.
+/// `~/Library/Application Support/Cantis/CustomModels/registry.json`.
 @MainActor
 @Observable
 final class CustomModelRegistry {

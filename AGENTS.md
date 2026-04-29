@@ -1,10 +1,10 @@
-# AGENTS.md — Auralux AI Agent Guide
+# AGENTS.md — Cantis AI Agent Guide
 
-This document is the orientation for AI coding agents working on Auralux. It covers architecture, conventions, file layout, and patterns to follow when making changes.
+This document is the orientation for AI coding agents working on Cantis. It covers architecture, conventions, file layout, and patterns to follow when making changes.
 
 ## Project Overview
 
-Auralux is a **fully native macOS application for AI music generation**. ACE-Step v1.5 runs in-process on Apple Silicon via [mlx-swift](https://github.com/ml-explore/mlx-swift). There is no Python backend, no HTTP server, no IPC layer at runtime. Users describe the music they want via prompts, tags, and lyrics, and the app generates it locally.
+Cantis is a **fully native macOS application for AI music generation**. ACE-Step v1.5 runs in-process on Apple Silicon via [mlx-swift](https://github.com/ml-explore/mlx-swift). There is no Python backend, no HTTP server, no IPC layer at runtime. Users describe the music they want via prompts, tags, and lyrics, and the app generates it locally.
 
 - **Platform:** macOS 26+ (Tahoe), Apple Silicon only
 - **Language:** Swift 6.2 (entire app); Python is used **only** by the offline weight converter (`tools/convert_weights.py`)
@@ -16,9 +16,9 @@ Auralux is a **fully native macOS application for AI music generation**. ACE-Ste
 ## Repository Structure
 
 ```
-auralux/
-├── Auralux/                              # SwiftUI macOS application (single binary)
-│   ├── AuraluxApp.swift                  # @main; configures MLX cache, ModelContainer, env injection
+cantis/
+├── Cantis/                              # SwiftUI macOS application (single binary)
+│   ├── CantisApp.swift                  # @main; configures MLX cache, ModelContainer, env injection
 │   ├── Info.plist
 │   ├── Entitlements.plist                # App Sandbox + network/files/audio
 │   ├── Components/                       # Reusable UI (TagChip, SliderControl, EngineStatusView, …)
@@ -42,7 +42,7 @@ auralux/
 │   │   ├── Settings/
 │   │   └── Sidebar/
 │   └── Resources/
-├── AuraluxTests/                         # Swift unit + MLX integration tests
+├── CantisTests/                         # Swift unit + MLX integration tests
 ├── docs/                                 # ARCHITECTURE, DEVELOPMENT, PENDING_PLAN, RELEASE_CHECKLIST
 ├── tools/convert_weights.py              # PyTorch → MLX weight converter (XL / custom variants)
 ├── modeling_acestep_v15_turbo.py         # Reference PyTorch model (consumed by the converter)
@@ -56,7 +56,7 @@ auralux/
 
 ### Single-process model
 
-Auralux runs as one Swift binary. The SwiftUI app and the inference engine share an address space; weight loading, sampling, VAE decode, and audio writing all happen inside the same process via mlx-swift. No subprocess is spawned at runtime.
+Cantis runs as one Swift binary. The SwiftUI app and the inference engine share an address space; weight loading, sampling, VAE decode, and audio writing all happen inside the same process via mlx-swift. No subprocess is spawned at runtime.
 
 `tools/convert_weights.py` is the **only** place Python is involved, and it runs offline from the developer's shell — the running app never invokes it.
 
@@ -81,7 +81,7 @@ Auralux runs as one Swift binary. The SwiftUI app and the inference engine share
 └──────────────────────────────────────────────────┘
 ```
 
-### Inference engine (`Auralux/Inference/`)
+### Inference engine (`Cantis/Inference/`)
 
 `NativeInferenceEngine` is `@MainActor @Observable`. It owns:
 
@@ -91,7 +91,7 @@ Auralux runs as one Swift binary. The SwiftUI app and the inference engine share
 
 Heavy work (weight load, generation) is dispatched via `Task.detached(priority: .userInitiated)` so the main actor stays responsive. Generation progress is streamed back via `AsyncThrowingStream<GenerationProgress, Error>` (`preparing` / `step` / `saving` / `completed`).
 
-`DiTVariant` (in `Auralux/Models/DiTVariant.swift`) is the source of truth for variant metadata: display name, MLX directory name, default num steps, default CFG scale, max steps, CFG-distillation flag, and `canDownloadInApp`.
+`DiTVariant` (in `Cantis/Models/DiTVariant.swift`) is the source of truth for variant metadata: display name, MLX directory name, default num steps, default CFG scale, max steps, CFG-distillation flag, and `canDownloadInApp`.
 
 Variants:
 
@@ -119,12 +119,12 @@ notDownloaded ──▶ downloading(progress) ──▶ downloaded ──▶ loa
 1. User configures `GenerationParameters` in `GenerationView`.
 2. `GenerationViewModel` calls `NativeInferenceEngine.generate(request:)`.
 3. The engine picks the sampler for the variant (`TurboSampler` for CFG-distilled, `CFGSampler` for base/SFT) and runs Qwen3 text encoding → DiT sampling → VAE decode.
-4. Output is written to `~/Library/Application Support/Auralux/Generated/` and persisted to SwiftData via `HistoryService`.
+4. Output is written to `~/Library/Application Support/Cantis/Generated/` and persisted to SwiftData via `HistoryService`.
 5. The track appears in history and plays back in `PlayerView`.
 
 ### Model storage
 
-- Root: `~/Library/Application Support/Auralux/Models/<DiTVariant.mlxDirectoryName>/`
+- Root: `~/Library/Application Support/Cantis/Models/<DiTVariant.mlxDirectoryName>/`
 - Required files per variant: `dit/dit_weights.safetensors`, `dit/silence_latent.safetensors`, `lm/lm_weights.safetensors`, `vae/vae_weights.safetensors`, `text/text_weights.safetensors`, `text/text_vocab.json`, `text/text_merges.txt`
 - `ModelDownloader.manifest(for:)` is the source of truth for files, repo IDs, and sizes
 - Non-turbo variants symlink `lm/`, `vae/`, `text/` into the turbo directory
@@ -137,7 +137,7 @@ SwiftData models:
 - `Preset` — saved generation parameter configurations
 - `Tag` — reusable tag library with usage counts
 
-The `ModelContainer` is created once in `AuraluxApp.init()` and injected via `.modelContainer()`.
+The `ModelContainer` is created once in `CantisApp.init()` and injected via `.modelContainer()`.
 
 ## Coding Conventions
 
@@ -164,10 +164,10 @@ The `ModelContainer` is created once in `AuraluxApp.init()` and injected via `.m
 ### Project patterns
 
 - **MVVM + Services**: Views → ViewModels → Services → engine
-- **Service injection** in `AuraluxApp.init()` via `.environment(...)`
+- **Service injection** in `CantisApp.init()` via `.environment(...)`
 - **No singletons** for business logic (only `AppLogger.shared`)
 - **Graceful guard**: Generate is disabled until `modelState == .ready`. `SetupView` overlays `ContentView` whenever `engine.isOnboarding` is true.
-- **MLX memory hygiene**: `MLX.Memory.cacheLimit` is capped in `AuraluxApp.init()` (1 GB; 512 MB in low-memory mode) because MLX otherwise retains every buffer it has allocated.
+- **MLX memory hygiene**: `MLX.Memory.cacheLimit` is capped in `CantisApp.init()` (1 GB; 512 MB in low-memory mode) because MLX otherwise retains every buffer it has allocated.
 
 ### Git & branch conventions
 
@@ -180,14 +180,14 @@ The `ModelContainer` is created once in `AuraluxApp.init()` and injected via `.m
 
 ```bash
 swift build                                # Build
-swift run Auralux                          # Run (first launch shows SetupView and downloads weights)
+swift run Cantis                          # Run (first launch shows SetupView and downloads weights)
 swift test                                 # Run tests (use --skip pattern below in CI)
 swift test --skip 'ACEStepDiTTests|ACEStepLMTests|FeasibilityProbeTests|Qwen3ConditioningTests|Qwen3RealWeightsTests'
 python3 -m py_compile modeling_acestep_v15_turbo.py tools/convert_weights.py
 python tools/convert_weights.py --variant xl-turbo   # Optional: convert XL or custom weights
 ```
 
-Or open `Package.swift` in Xcode and run the `Auralux` target.
+Or open `Package.swift` in Xcode and run the `Cantis` target.
 
 ## Dependencies
 
@@ -225,7 +225,7 @@ There are no environment variables for runtime configuration.
 
 ## Testing
 
-Tests live in `AuraluxTests/`:
+Tests live in `CantisTests/`:
 
 - **ModelTests** — SwiftData model creation and validation
 - **ServiceTests** — service-layer behavior and error handling
@@ -236,42 +236,42 @@ Tests live in `AuraluxTests/`:
 
 | File | Why it matters |
 |------|---------------|
-| `Auralux/AuraluxApp.swift` | Entry point; MLX cache config, ModelContainer, env injection |
-| `Auralux/Views/ContentView.swift` | Root view; bootstraps services and overlays `SetupView` when onboarding |
-| `Auralux/Inference/NativeInferenceEngine.swift` | Engine state machine, download/load/generate orchestration |
-| `Auralux/Inference/DiT/TurboSampler.swift` | 8-step CFG-distilled sampler (Turbo / XL Turbo) |
-| `Auralux/Inference/DiT/CFGSampler.swift` | Twin-pass CFG sampler (base / SFT / XL base / XL SFT) |
-| `Auralux/Services/ModelDownloader.swift` | HuggingFace manifest, sequential resumable downloads |
-| `Auralux/Models/DiTVariant.swift` | Variant metadata (defaults, max steps, CFG-distillation flag) |
-| `Auralux/Models/GenerationParameters.swift` | Generation request DTO with default-decoding |
-| `Auralux/Utilities/Constants.swift` | App-wide constants |
+| `Cantis/CantisApp.swift` | Entry point; MLX cache config, ModelContainer, env injection |
+| `Cantis/Views/ContentView.swift` | Root view; bootstraps services and overlays `SetupView` when onboarding |
+| `Cantis/Inference/NativeInferenceEngine.swift` | Engine state machine, download/load/generate orchestration |
+| `Cantis/Inference/DiT/TurboSampler.swift` | 8-step CFG-distilled sampler (Turbo / XL Turbo) |
+| `Cantis/Inference/DiT/CFGSampler.swift` | Twin-pass CFG sampler (base / SFT / XL base / XL SFT) |
+| `Cantis/Services/ModelDownloader.swift` | HuggingFace manifest, sequential resumable downloads |
+| `Cantis/Models/DiTVariant.swift` | Variant metadata (defaults, max steps, CFG-distillation flag) |
+| `Cantis/Models/GenerationParameters.swift` | Generation request DTO with default-decoding |
+| `Cantis/Utilities/Constants.swift` | App-wide constants |
 | `Package.swift` | SPM manifest, dependency versions, target config |
 
 ## Common Tasks
 
 ### Adding a new View
 
-1. Create `Auralux/Views/<Section>/<Name>View.swift`.
+1. Create `Cantis/Views/<Section>/<Name>View.swift`.
 2. Use `@Environment` for ViewModels / engine.
 3. Follow existing patterns in the same section.
 4. Put new state on the appropriate ViewModel.
 
 ### Adding a new Service
 
-1. Create `Auralux/Services/<Name>Service.swift`.
+1. Create `Cantis/Services/<Name>Service.swift`.
 2. Use `@Observable` (UI-facing) or `actor` (thread-safe).
-3. Instantiate in `AuraluxApp.init()` and inject via `.environment(...)`.
-4. Add tests in `AuraluxTests/ServiceTests.swift`.
+3. Instantiate in `CantisApp.init()` and inject via `.environment(...)`.
+4. Add tests in `CantisTests/ServiceTests.swift`.
 
 ### Adding a new SwiftData Model
 
-1. Create `Auralux/Models/<Name>.swift` with `@Model`.
-2. Register in the `ModelContainer` initializer in `AuraluxApp.init()`.
-3. Add tests in `AuraluxTests/ModelTests.swift`.
+1. Create `Cantis/Models/<Name>.swift` with `@Model`.
+2. Register in the `ModelContainer` initializer in `CantisApp.init()`.
+3. Add tests in `CantisTests/ModelTests.swift`.
 
 ### Touching the inference engine
 
-1. Edits go in `Auralux/Inference/`. Keep weight-loader code symmetrical with `tools/convert_weights.py` so that converted bundles round-trip.
+1. Edits go in `Cantis/Inference/`. Keep weight-loader code symmetrical with `tools/convert_weights.py` so that converted bundles round-trip.
 2. Run the MLX integration suites locally in Xcode against real weights.
 3. If you add a new required file to a variant bundle, update both `NativeInferenceEngine.isDownloaded(_:)` and `ModelDownloader.manifest(for:)`.
 
@@ -285,7 +285,7 @@ Tests live in `AuraluxTests/`:
 ## Important Notes
 
 - **No Xcode project file** — the project uses SPM exclusively (`Package.swift`).
-- **Models are not in the repo** — converted MLX weights are downloaded into `~/Library/Application Support/Auralux/Models/` at runtime (Turbo / SFT / Base) or produced by `tools/convert_weights.py` (XL / custom).
+- **Models are not in the repo** — converted MLX weights are downloaded into `~/Library/Application Support/Cantis/Models/` at runtime (Turbo / SFT / Base) or produced by `tools/convert_weights.py` (XL / custom).
 - **The app runs as an SPM executable** — `AppDelegate` promotes the process to a regular GUI application (menu bar, Dock icon).
 - **No Combine** — the codebase uses Swift structured concurrency (`async/await`, `Task`, `AsyncThrowingStream`).
 - **No Python at runtime** — the only Python in the repo is offline conversion tooling.
