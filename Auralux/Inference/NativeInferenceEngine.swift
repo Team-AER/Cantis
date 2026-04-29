@@ -193,6 +193,53 @@ final class NativeInferenceEngine {
         }
     }
 
+    /// Removes downloaded weights for a variant from disk. Deleting Turbo also
+    /// removes any downloaded SFT/Base variants because they symlink lm/, vae/,
+    /// text/ from Turbo and would otherwise be left with dangling symlinks.
+    /// If the deleted variant is currently loaded, releases it from memory and
+    /// resets `modelState` to `.notDownloaded`.
+    func delete(_ variant: DiTVariant) async {
+        guard activeDownloadVariant != variant else { return }
+
+        var toDelete: [DiTVariant] = [variant]
+        if variant == .turbo {
+            for v in DiTVariant.allCases where v.requiresTurboBase && isDownloaded(v) {
+                toDelete.append(v)
+            }
+        }
+
+        let touchesCurrent = toDelete.contains(currentVariant)
+        if touchesCurrent {
+            releaseModels()
+        }
+
+        for v in toDelete {
+            let dir = mlxModelDirectory(for: v)
+            do {
+                if FileManager.default.fileExists(atPath: dir.path) {
+                    try FileManager.default.removeItem(at: dir)
+                }
+                log.info("Deleted \(v.rawValue) weights at \(dir.path)", category: .inference)
+            } catch {
+                log.error("Failed to delete \(v.rawValue): \(error.localizedDescription)", category: .inference)
+                if v == currentVariant {
+                    modelState = .error(error.localizedDescription)
+                }
+                return
+            }
+        }
+
+        if touchesCurrent {
+            modelState = .notDownloaded
+        }
+    }
+
+    /// Deletes the variant's weights and immediately re-downloads them.
+    func redownload(_ variant: DiTVariant) async {
+        await delete(variant)
+        await download(variant)
+    }
+
     /// Downloads turbo then loads — used by SetupView for first-time onboarding.
     func downloadAndLoad() async throws {
         guard !isGenerating else { return }

@@ -5,6 +5,8 @@ struct ModelSettingsView: View {
     @Environment(SettingsViewModel.self) private var settings
 
     @State private var downloadSheetVariant: DiTVariant? = nil
+    @State private var pendingDelete: DiTVariant? = nil
+    @State private var pendingRedownload: DiTVariant? = nil
 
     private var isLowMemoryMac: Bool {
         ProcessInfo.processInfo.physicalMemory <= 17_179_869_184
@@ -22,6 +24,36 @@ struct ModelSettingsView: View {
         .sheet(item: $downloadSheetVariant) { variant in
             ModelDownloadSheet(variant: variant)
                 .environment(engine)
+        }
+        .confirmationDialog(
+            pendingDelete.map { "Delete \($0.displayName)?" } ?? "",
+            isPresented: Binding(
+                get: { pendingDelete != nil },
+                set: { if !$0 { pendingDelete = nil } }
+            ),
+            presenting: pendingDelete
+        ) { variant in
+            Button("Delete", role: .destructive) {
+                Task { await engine.delete(variant) }
+            }
+            Button("Cancel", role: .cancel) { }
+        } message: { variant in
+            Text(deleteMessage(for: variant))
+        }
+        .confirmationDialog(
+            pendingRedownload.map { "Redownload \($0.displayName)?" } ?? "",
+            isPresented: Binding(
+                get: { pendingRedownload != nil },
+                set: { if !$0 { pendingRedownload = nil } }
+            ),
+            presenting: pendingRedownload
+        ) { variant in
+            Button("Redownload") {
+                Task { await engine.redownload(variant) }
+            }
+            Button("Cancel", role: .cancel) { }
+        } message: { variant in
+            Text(redownloadMessage(for: variant))
         }
     }
 
@@ -158,9 +190,7 @@ struct ModelSettingsView: View {
             if isDownloading {
                 downloadingIndicator(variant: variant)
             } else if downloaded {
-                Text(formattedSize(bytes: ModelDownloader.estimatedBytes(for: variant)))
-                    .font(.caption)
-                    .foregroundStyle(.tertiary)
+                downloadedActions(variant: variant)
             } else {
                 downloadButton(variant: variant)
             }
@@ -200,6 +230,36 @@ struct ModelSettingsView: View {
             Text("\(Int(engine.downloadProgress * 100))%")
                 .font(.caption2.monospacedDigit())
                 .foregroundStyle(.secondary)
+        }
+    }
+
+    @ViewBuilder
+    private func downloadedActions(variant: DiTVariant) -> some View {
+        HStack(spacing: 8) {
+            Text(formattedSize(bytes: ModelDownloader.estimatedBytes(for: variant)))
+                .font(.caption)
+                .foregroundStyle(.tertiary)
+
+            Menu {
+                Button {
+                    pendingRedownload = variant
+                } label: {
+                    Label("Redownload", systemImage: "arrow.clockwise")
+                }
+                Button(role: .destructive) {
+                    pendingDelete = variant
+                } label: {
+                    Label("Delete", systemImage: "trash")
+                }
+            } label: {
+                Image(systemName: "ellipsis.circle")
+                    .font(.body)
+                    .foregroundStyle(.secondary)
+            }
+            .menuStyle(.borderlessButton)
+            .menuIndicator(.hidden)
+            .fixedSize()
+            .help("Manage \(variant.displayName)")
         }
     }
 
@@ -244,5 +304,30 @@ struct ModelSettingsView: View {
         guard bytes > 0 else { return "—" }
         let gb = Double(bytes) / 1_000_000_000
         return String(format: "~%.1f GB", gb)
+    }
+
+    private func deleteMessage(for variant: DiTVariant) -> String {
+        let size = formattedSize(bytes: ModelDownloader.estimatedBytes(for: variant))
+        if variant == .turbo {
+            // SFT/Base symlink lm/, vae/, text/ from Turbo — they break if Turbo is removed.
+            let dependents = DiTVariant.allCases.filter { $0.requiresTurboBase && engine.isDownloaded($0) }
+            if !dependents.isEmpty {
+                let names = dependents.map(\.displayName).joined(separator: ", ")
+                return "Removes Turbo (\(size)) and the variants that share its components: \(names). You'll need to redownload them separately."
+            }
+        }
+        return "Removes \(variant.displayName) weights from disk (\(size) freed)."
+    }
+
+    private func redownloadMessage(for variant: DiTVariant) -> String {
+        let size = formattedSize(bytes: ModelDownloader.estimatedBytes(for: variant))
+        if variant == .turbo {
+            let dependents = DiTVariant.allCases.filter { $0.requiresTurboBase && engine.isDownloaded($0) }
+            if !dependents.isEmpty {
+                let names = dependents.map(\.displayName).joined(separator: ", ")
+                return "Deletes Turbo and its dependent variants (\(names)), then redownloads Turbo (\(size)). Other variants must be redownloaded manually."
+            }
+        }
+        return "Deletes and redownloads \(variant.displayName) (\(size))."
     }
 }

@@ -256,7 +256,9 @@ struct AudioImportView: View {
             VStack(alignment: .leading, spacing: 12) {
                 if !viewModel.mode.requiresSourceAudio {
                     SliderControl(label: "Duration", value: bindable.duration,
-                                  range: 10...180, unit: "sec")
+                                  range: 10...600, unit: "sec",
+                                  warningThreshold: 240,
+                                  warningMessage: "May use significant RAM beyond 240 sec.")
                 }
                 SliderControl(label: "Variance", value: bindable.variance,
                               range: 0...1, unit: "")
