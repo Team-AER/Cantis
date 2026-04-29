@@ -80,7 +80,7 @@ final class SettingsViewModel {
 
     func resetToDefaults() {
         quantizationMode = .fp16
-        lowMemoryMode = false
+        lowMemoryMode = AppConstants.isLowMemoryMachine
         useLM = false
         defaultExportFormat = .wav
         ditVariant = .turbo
@@ -111,6 +111,11 @@ final class SettingsViewModel {
         }
         if defaults.object(forKey: Keys.lowMemoryMode) != nil {
             lowMemoryMode = defaults.bool(forKey: Keys.lowMemoryMode)
+        } else if AppConstants.isLowMemoryMachine {
+            // First launch on a ≤ 16 GiB Mac — opt them in by default. Setting
+            // the property triggers `didSet`, which persists the value, so
+            // `AuraluxApp.init()` will read it on the next launch as well.
+            lowMemoryMode = true
         }
         if defaults.object(forKey: Keys.useLM) != nil {
             useLM = defaults.bool(forKey: Keys.useLM)

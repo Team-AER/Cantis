@@ -35,7 +35,7 @@ struct SettingsView: View {
                             Toggle("", isOn: Bindable(viewModel).useLM)
                                 .labelsHidden()
                                 .onChange(of: viewModel.useLM) { _, _ in
-                                    Task { await engine.loadModels() }
+                                    engine.unloadModels()
                                 }
                         }
                         Text("Loads the 5 Hz audio-token LM (~1.2 GB resident). Reserved for the upcoming text2music-LM mode; off by default.")
@@ -58,7 +58,7 @@ struct SettingsView: View {
                         .labelsHidden()
                         .frame(width: 220)
                         .onChange(of: viewModel.ditVariant) { _, _ in
-                            Task { await engine.loadModels() }
+                            engine.unloadModels()
                         }
                     }
                     Divider()

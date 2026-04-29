@@ -8,9 +8,7 @@ struct ModelSettingsView: View {
     @State private var pendingDelete: DiTVariant? = nil
     @State private var pendingRedownload: DiTVariant? = nil
 
-    private var isLowMemoryMac: Bool {
-        ProcessInfo.processInfo.physicalMemory <= 17_179_869_184
-    }
+    private var isLowMemoryMac: Bool { AppConstants.isLowMemoryMachine }
 
     var body: some View {
         VStack(alignment: .leading, spacing: 16) {

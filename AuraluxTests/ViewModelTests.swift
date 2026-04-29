@@ -121,7 +121,8 @@ final class ViewModelTests: XCTestCase {
         let vm = SettingsViewModel(defaults: defaults)
 
         XCTAssertEqual(vm.quantizationMode, .fp16)
-        XCTAssertFalse(vm.lowMemoryMode)
+        // First-launch default tracks the machine class: ≤ 16 GiB Macs opt in.
+        XCTAssertEqual(vm.lowMemoryMode, AppConstants.isLowMemoryMachine)
         XCTAssertEqual(vm.defaultExportFormat, .wav)
     }
 
@@ -158,12 +159,12 @@ final class ViewModelTests: XCTestCase {
         let defaults = UserDefaults(suiteName: "test-\(UUID().uuidString)")!
         let vm = SettingsViewModel(defaults: defaults)
         vm.quantizationMode = .fp16
-        vm.lowMemoryMode = true
+        vm.lowMemoryMode = !AppConstants.isLowMemoryMachine  // flip away from the machine default so reset is observable
 
         vm.resetToDefaults()
 
         XCTAssertEqual(vm.quantizationMode, .fp16)
-        XCTAssertFalse(vm.lowMemoryMode)
+        XCTAssertEqual(vm.lowMemoryMode, AppConstants.isLowMemoryMachine)
     }
 
     // MARK: - PlayerViewModel

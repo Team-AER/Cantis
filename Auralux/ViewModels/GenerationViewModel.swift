@@ -64,6 +64,18 @@ final class GenerationViewModel {
         cfgScale = settings.ditVariant.respectsCFG ? settings.defaultCfgScale : 1.0
     }
 
+    /// Restore the per-request sliders to defaults derived from the active
+    /// DiT variant and the currently-selected mode. Keeps the user's
+    /// mode/prompt/lyrics — only the numeric knobs reset.
+    func resetParameters(using settings: SettingsViewModel) {
+        duration = GenerationParameters.default.duration
+        variance = GenerationParameters.default.variance
+        numSteps = settings.defaultNumSteps
+        scheduleShift = settings.defaultScheduleShift
+        cfgScale = settings.ditVariant.respectsCFG ? settings.defaultCfgScale : 1.0
+        seedText = ""
+    }
+
     func applyPreset(_ preset: Preset) {
         prompt = preset.prompt
         lyrics = preset.lyricTemplate
@@ -94,6 +106,12 @@ final class GenerationViewModel {
         progress = 0
         progressMessage = "Preparing..."
         currentJobID = nil
+
+        // Resolve the seed up front so the user can see the actual value that
+        // was used (the "Random" placeholder is replaced by a concrete number).
+        if Int(seedText) == nil {
+            seedText = String(Self.randomSeedValue())
+        }
 
         let request = GenerationParameters(
             prompt: prompt,
@@ -157,6 +175,16 @@ final class GenerationViewModel {
                 log.error("Generation failed: \(error.localizedDescription)", category: .generation)
             }
         }
+    }
+
+    /// Replace the seed with a freshly-randomized value so the user can keep
+    /// rolling without having to clear the field manually.
+    func randomizeSeed() {
+        seedText = String(Self.randomSeedValue())
+    }
+
+    private static func randomSeedValue() -> UInt32 {
+        UInt32.random(in: 0...UInt32.max)
     }
 
     func cancel() {

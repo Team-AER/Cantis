@@ -11,7 +11,7 @@ struct ParameterControlsView: View {
     var body: some View {
         let bindable = Bindable(viewModel)
 
-        GroupBox("Parameters") {
+        GroupBox(label: parametersHeader) {
             VStack(alignment: .leading, spacing: 12) {
                 modePicker(bindable)
 
@@ -48,6 +48,22 @@ struct ParameterControlsView: View {
 
                 seedField(bindable)
             }
+        }
+    }
+
+    private var parametersHeader: some View {
+        HStack {
+            Text("Parameters")
+            Spacer()
+            Button {
+                viewModel.resetParameters(using: settings)
+            } label: {
+                Label("Reset", systemImage: "arrow.counterclockwise")
+                    .labelStyle(.titleAndIcon)
+                    .font(.caption)
+            }
+            .buttonStyle(.borderless)
+            .help("Reset duration, variance, steps, shift, CFG, and seed to defaults for the current model and mode.")
         }
     }
 
@@ -244,6 +260,13 @@ struct ParameterControlsView: View {
                     let digits = newValue.filter(\.isNumber)
                     if digits != newValue { bindable.seedText.wrappedValue = digits }
                 }
+            Button {
+                viewModel.randomizeSeed()
+            } label: {
+                Image(systemName: "dice")
+            }
+            .buttonStyle(.borderless)
+            .help("Generate a new random seed.")
         }
     }
 }

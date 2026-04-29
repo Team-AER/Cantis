@@ -22,4 +22,23 @@ enum AppConstants {
         "pop", "rock", "hip-hop", "classical", "folk", "r&b", "dance", "country", "reggae",
         "blues", "soul", "metal", "punk", "latin", "world", "acoustic", "experimental"
     ]
+
+    // MARK: - Machine memory tiers
+    //
+    // ACE-Step 1.5 needs roughly 8–10 GB resident at peak (weight load + DiT
+    // activations + VAE decode). Macs at or below 16 GiB need low-memory mode
+    // on by default, and machines strictly below 16 GiB get a launch warning
+    // because they may swap or run out of memory entirely.
+
+    /// 16 GiB in bytes (matches Apple's binary-GiB reporting).
+    static let lowMemoryThresholdBytes: UInt64 = 17_179_869_184
+
+    /// Physical RAM in bytes for the current machine.
+    static var physicalMemoryBytes: UInt64 { ProcessInfo.processInfo.physicalMemory }
+
+    /// True when this Mac has ≤ 16 GiB RAM — low-memory mode should be on by default.
+    static var isLowMemoryMachine: Bool { physicalMemoryBytes <= lowMemoryThresholdBytes }
+
+    /// True when this Mac has < 16 GiB RAM — warn the user that the app may swap.
+    static var isUnderspecMachine: Bool { physicalMemoryBytes < lowMemoryThresholdBytes }
 }

@@ -544,10 +544,27 @@ final class NativeInferenceEngine {
     }
 
     private func releaseModels() {
+        // Only touch MLX if weights were actually loaded — otherwise
+        // `MLX.Memory.clearCache()` becomes the first MLX call and tries to
+        // load the metallib, which fails on headless CI runners that have no
+        // Metal device.
+        let hadLoadedModels = dit != nil || lm != nil || vae != nil
         dit = nil; lm = nil; vae = nil
         silenceLatent = nil; tokenizer = nil; textEncoder = nil; textTokenizer = nil
-        MLX.Memory.clearCache()
+        if hadLoadedModels { MLX.Memory.clearCache() }
         if case .ready = modelState { modelState = .downloaded }
+    }
+
+    /// Drop the currently-loaded weights so the next generation picks up the
+    /// variant / `useLM` setting the user just chose. We deliberately don't
+    /// eagerly reload — model loading is expensive (multi-GB safetensors +
+    /// MLX allocations) and shouldn't run until the user actually asks to
+    /// generate.
+    func unloadModels() {
+        // An in-flight generation already releases on termination; don't tear
+        // down weights it is still using.
+        guard !isGenerating else { return }
+        releaseModels()
     }
 
     // MARK: - Mode-specific input preparation

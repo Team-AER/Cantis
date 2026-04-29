@@ -8,6 +8,7 @@ struct PlayerView: View {
 
     @Environment(PlayerViewModel.self) private var viewModel
     @Environment(SettingsViewModel.self) private var settings
+    @Environment(GenerationViewModel.self) private var generationViewModel
 
     @State private var exportError: String? = nil
 
@@ -34,11 +35,18 @@ struct PlayerView: View {
             )
             .frame(height: 120)
 
-            SpectrumAnalyzerView(
-                magnitudes: viewModel.spectrumBins,
-                isPlaying: viewModel.isPlaying
-            )
-            .frame(height: 90)
+            VStack(alignment: .leading, spacing: 6) {
+                if generationViewModel.state.isBusy {
+                    ProgressView(value: generationViewModel.progress)
+                        .progressViewStyle(.linear)
+                        .accessibilityIdentifier("generation-progress")
+                }
+                SpectrumAnalyzerView(
+                    magnitudes: viewModel.spectrumBins,
+                    isPlaying: viewModel.isPlaying
+                )
+                .frame(height: 90)
+            }
 
             HStack(spacing: 12) {
                 Button(viewModel.isPlaying ? "Pause" : "Play") {

@@ -251,7 +251,19 @@ struct AudioImportView: View {
     // MARK: - Sampler
 
     private var samplerControls: some View {
-        GroupBox("Parameters") {
+        GroupBox(label: HStack {
+            Text("Parameters")
+            Spacer()
+            Button {
+                viewModel.resetParameters(using: settings)
+            } label: {
+                Label("Reset", systemImage: "arrow.counterclockwise")
+                    .labelStyle(.titleAndIcon)
+                    .font(.caption)
+            }
+            .buttonStyle(.borderless)
+            .help("Reset duration, variance, steps, shift, CFG, and seed to defaults for the current model and mode.")
+        }) {
             let bindable = Bindable(viewModel)
             VStack(alignment: .leading, spacing: 12) {
                 if !viewModel.mode.requiresSourceAudio {

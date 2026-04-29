@@ -4,18 +4,12 @@ struct GenerationView: View {
     @Environment(GenerationViewModel.self) private var viewModel
     @Environment(SettingsViewModel.self) private var settings
     @Environment(NativeInferenceEngine.self) private var engine
-    @Environment(\.modelContext) private var modelContext
     @State private var tagText = ""
-    @State private var completionDismissTask: Task<Void, Never>?
     @State private var didSeedDefaults = false
     @State private var downloadSheetVariant: DiTVariant? = nil
 
     private var engineReady: Bool {
         engine.modelState.isReady
-    }
-
-    private var generateDisabled: Bool {
-        viewModel.state.isBusy || !engine.modelState.isReady || engine.isGenerating
     }
 
     var body: some View {
@@ -41,70 +35,6 @@ struct GenerationView: View {
 
                 LyricEditorView(lyrics: Bindable(viewModel).lyrics)
                 ParameterControlsView()
-
-                HStack {
-                    Button("Generate") {
-                        viewModel.generate(in: modelContext)
-                    }
-                    .keyboardShortcut("g", modifiers: [.command])
-                    .disabled(generateDisabled)
-                    .accessibilityIdentifier("generate-button")
-
-                    Button("Cancel") {
-                        viewModel.cancel()
-                    }
-                    .disabled(!viewModel.state.isBusy)
-                    .accessibilityIdentifier("cancel-button")
-
-                    Spacer()
-
-                    switch viewModel.state {
-                    case .generating, .preparing:
-                        VStack(alignment: .trailing, spacing: 4) {
-                            ProgressView(value: viewModel.progress)
-                                .frame(width: 200)
-                                .accessibilityIdentifier("generation-progress")
-                            if !viewModel.progressMessage.isEmpty {
-                                Text(viewModel.progressMessage)
-                                    .font(.caption2)
-                                    .foregroundStyle(.secondary)
-                                    .lineLimit(1)
-                            }
-                        }
-                    case .completed:
-                        Label("Done", systemImage: "checkmark.circle.fill")
-                            .foregroundStyle(.green)
-                            .accessibilityIdentifier("generation-status")
-                            .onAppear {
-                                completionDismissTask?.cancel()
-                                completionDismissTask = Task {
-                                    try? await Task.sleep(for: .seconds(3))
-                                    if !Task.isCancelled {
-                                        viewModel.state = .idle
-                                    }
-                                }
-                            }
-                            .onDisappear {
-                                completionDismissTask?.cancel()
-                            }
-                    case .failed(let message):
-                        HStack(spacing: 6) {
-                            Label(message, systemImage: "exclamationmark.triangle.fill")
-                                .foregroundStyle(.red)
-                                .accessibilityIdentifier("generation-status")
-                            Button {
-                                viewModel.state = .idle
-                            } label: {
-                                Image(systemName: "xmark.circle.fill")
-                                    .foregroundStyle(.secondary)
-                            }
-                            .buttonStyle(.plain)
-                            .accessibilityLabel("Dismiss error")
-                        }
-                    case .idle:
-                        EmptyView()
-                    }
-                }
             }
             .padding(20)
         }

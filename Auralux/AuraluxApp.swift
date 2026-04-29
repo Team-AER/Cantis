@@ -37,7 +37,11 @@ struct AuraluxApp: App {
         // allocated for reuse, which makes resident memory grow to the high-water mark
         // of the union of every phase (weight load + DiT activations + VAE decode) and
         // never shrink. Halve it under low-memory mode.
-        let lowMemory = UserDefaults.standard.bool(forKey: "settings.lowMemoryMode")
+        // First launch on a ≤ 16 GiB Mac falls back to the machine class so we
+        // don't have to depend on `SettingsViewModel`'s init order to have
+        // already persisted its first-launch default.
+        let storedLowMemory = UserDefaults.standard.object(forKey: "settings.lowMemoryMode") as? Bool
+        let lowMemory = storedLowMemory ?? AppConstants.isLowMemoryMachine
         MLX.Memory.cacheLimit = (lowMemory ? 512 : 1024) * 1024 * 1024
 
         let engine = NativeInferenceEngine()
