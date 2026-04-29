@@ -30,7 +30,8 @@ struct AuraluxApp: App {
     @State private var settingsViewModel = SettingsViewModel()
     @State private var engine: NativeInferenceEngine
 
-    private let modelContainer: ModelContainer
+    private let modelContainer: ModelContainer?
+    private let modelContainerError: Error?
 
     init() {
         // Cap the MLX freed-buffer pool. By default MLX retains every buffer it has
@@ -54,8 +55,11 @@ struct AuraluxApp: App {
                 Preset.self,
                 Tag.self
             )
+            modelContainerError = nil
         } catch {
-            fatalError("Failed to initialize SwiftData container: \(error)")
+            modelContainer = nil
+            modelContainerError = error
+            AppLogger.shared.error("Failed to initialize SwiftData container: \(error)", category: .app)
         }
 
         AppLogger.shared.info("Auralux launched", category: .app)
@@ -63,33 +67,66 @@ struct AuraluxApp: App {
 
     var body: some Scene {
         WindowGroup {
-            ContentView()
-                .frame(minWidth: AppConstants.minimumWindowWidth, minHeight: AppConstants.minimumWindowHeight)
-                .environment(sidebarViewModel)
-                .environment(generationViewModel)
-                .environment(historyViewModel)
-                .environment(playerViewModel)
-                .environment(settingsViewModel)
-                .environment(engine)
-                .onAppear {
-                    appDelegate.onTerminate = {
-                        playerViewModel.playerService.shutdown()
-                        engine.shutdown()
+            if let modelContainer {
+                ContentView()
+                    .frame(minWidth: AppConstants.minimumWindowWidth, minHeight: AppConstants.minimumWindowHeight)
+                    .environment(sidebarViewModel)
+                    .environment(generationViewModel)
+                    .environment(historyViewModel)
+                    .environment(playerViewModel)
+                    .environment(settingsViewModel)
+                    .environment(engine)
+                    .modelContainer(modelContainer)
+                    .onAppear {
+                        appDelegate.onTerminate = {
+                            playerViewModel.playerService.shutdown()
+                            engine.shutdown()
+                        }
                     }
-                }
+            } else {
+                StorageInitErrorView(error: modelContainerError)
+                    .frame(minWidth: AppConstants.minimumWindowWidth, minHeight: AppConstants.minimumWindowHeight)
+            }
         }
-        .modelContainer(modelContainer)
         .defaultSize(width: 1280, height: 840)
         .commands {
             CommandGroup(replacing: .appInfo) {
                 Button("About Auralux") {
                     NSApplication.shared.orderFrontStandardAboutPanel(options: [
                         NSApplication.AboutPanelOptionKey.applicationName: AppConstants.appName,
-                        NSApplication.AboutPanelOptionKey.applicationVersion: "0.1.0",
+                        NSApplication.AboutPanelOptionKey.applicationVersion: AppConstants.appVersion,
                     ])
                 }
             }
             CommandGroup(replacing: .newItem) {}
         }
+    }
+}
+
+private struct StorageInitErrorView: View {
+    let error: Error?
+
+    var body: some View {
+        VStack(spacing: 16) {
+            Image(systemName: "exclamationmark.triangle.fill")
+                .font(.system(size: 48))
+                .foregroundStyle(.orange)
+            Text("Auralux can't start")
+                .font(.title2.bold())
+            Text("The on-disk library couldn't be opened. Quit Auralux and try again, or remove the app's container if the problem persists.")
+                .multilineTextAlignment(.center)
+                .foregroundStyle(.secondary)
+                .frame(maxWidth: 480)
+            if let error {
+                Text(String(describing: error))
+                    .font(.caption.monospaced())
+                    .foregroundStyle(.tertiary)
+                    .textSelection(.enabled)
+                    .padding(.top, 8)
+            }
+            Button("Quit") { NSApp.terminate(nil) }
+                .padding(.top, 8)
+        }
+        .padding(40)
     }
 }

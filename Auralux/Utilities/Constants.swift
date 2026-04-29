@@ -5,6 +5,12 @@ enum AppConstants {
     static let minimumWindowWidth: Double = 1024
     static let minimumWindowHeight: Double = 768
 
+    /// Marketing version from Info.plist (`CFBundleShortVersionString`),
+    /// falling back to "dev" for SPM builds where the plist is absent.
+    static var appVersion: String {
+        Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String ?? "dev"
+    }
+
     // ACE-Step 1.5 model configuration
     static let ditModelName = "acestep-v15-turbo"
     static let llmModelName = "acestep-5Hz-lm-0.6B"

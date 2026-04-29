@@ -166,16 +166,6 @@ actor ModelDownloader {
 
     // MARK: - Private
 
-    private func createSymlinks(in variantDir: URL, linkedTo turboDir: URL) throws {
-        let fm = FileManager.default
-        let turboName = turboDir.lastPathComponent
-        for sharedDir in ["lm", "vae", "text"] {
-            let link = variantDir.appendingPathComponent(sharedDir)
-            if fm.fileExists(atPath: link.path) { continue }
-            try fm.createSymbolicLink(atPath: link.path, withDestinationPath: "../\(turboName)/\(sharedDir)")
-        }
-    }
-
     /// Symlinks lm/, vae/, text/ from a custom-model directory to the turbo
     /// directory. The two dirs may be siblings (same parent) or arbitrary —
     /// we use absolute paths so external folders work too.
