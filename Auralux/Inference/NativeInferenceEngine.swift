@@ -894,9 +894,11 @@ final class NativeInferenceEngine {
         data.append(contentsOf: "data".utf8)
         le32(dataSize)
 
+        let peak = floats.reduce(0.0 as Float) { max($0, abs($1)) }
+        let scale: Float = peak > 1.0 ? 1.0 / peak : 1.0
         for s in floats {
-            let clamped = max(-1.0, min(1.0, s))
-            le16(UInt16(bitPattern: Int16(clamped * 32767)))
+            let normalized = max(-1.0, min(1.0, s * scale))
+            le16(UInt16(bitPattern: Int16(normalized * 32767)))
         }
 
         try data.write(to: url, options: .atomic)
