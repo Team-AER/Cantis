@@ -756,19 +756,21 @@ final class NativeInferenceEngine {
             textBranch = (textProjected, textMask)
         }
 
-        // ── Lyric branch (only when non-empty) ───────────────────────────────
-        let lyricsRaw = request.lyrics.trimmingCharacters(in: .whitespacesAndNewlines)
+        // ── Lyric branch ──────────────────────────────────────────────────────
+        // Always emit a lyric branch — empty lyrics produce garbled audio because
+        // the model expects structural section markers. Fall back to "[verse]\n\n[chorus]"
+        // when the user clears the lyrics field, matching upstream behavior.
+        let lyricsTrimmed = request.lyrics.trimmingCharacters(in: .whitespacesAndNewlines)
+        let lyricsForModel = lyricsTrimmed.isEmpty ? "[verse]\n\n[chorus]" : lyricsTrimmed
+        let lyricPrompt = formatLyrics(lyrics: lyricsForModel, language: request.language)
+        let lyricTokens = clampTokenLength(textTokenizer.encode(lyricPrompt), max: 2048)
         var lyricBranch: (hidden: MLXArray, mask: MLXArray)? = nil
-        if !lyricsRaw.isEmpty {
-            let lyricPrompt = formatLyrics(lyrics: lyricsRaw, language: request.language)
-            let lyricTokens = clampTokenLength(textTokenizer.encode(lyricPrompt), max: 2048)
-            if !lyricTokens.isEmpty {
-                let lyricIds = MLXArray(lyricTokens.map { Int32($0) }).reshaped([1, lyricTokens.count])
-                let lyricEmbeds = textEncoder.embed(lyricIds)         // [1, S_lyric, 1024]
-                let lyricEncoded = dit.lyricEncoder(lyricEmbeds)      // [1, S_lyric, 2048]
-                let lyricMask = MLXArray.ones([1, lyricTokens.count]).asType(.int32)
-                lyricBranch = (lyricEncoded, lyricMask)
-            }
+        if !lyricTokens.isEmpty {
+            let lyricIds = MLXArray(lyricTokens.map { Int32($0) }).reshaped([1, lyricTokens.count])
+            let lyricEmbeds = textEncoder.embed(lyricIds)         // [1, S_lyric, 1024]
+            let lyricEncoded = dit.lyricEncoder(lyricEmbeds)      // [1, S_lyric, 2048]
+            let lyricMask = MLXArray.ones([1, lyricTokens.count]).asType(.int32)
+            lyricBranch = (lyricEncoded, lyricMask)
         }
 
         // ── Timbre branch ────────────────────────────────────────────────────
