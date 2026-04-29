@@ -1,9 +1,14 @@
+import AVFoundation
+import AppKit
 import SwiftUI
+import UniformTypeIdentifiers
 
 struct PlayerView: View {
     let track: GeneratedTrack
 
     @Environment(PlayerViewModel.self) private var viewModel
+
+    @State private var exportError: String? = nil
 
     var body: some View {
         VStack(alignment: .leading, spacing: 16) {
@@ -15,7 +20,7 @@ struct PlayerView: View {
                     .foregroundStyle(.secondary)
             }
 
-            if let error = viewModel.errorMessage {
+            if let error = viewModel.errorMessage ?? exportError {
                 Label(error, systemImage: "exclamationmark.triangle")
                     .foregroundStyle(.red)
                     .font(.callout)
@@ -48,6 +53,12 @@ struct PlayerView: View {
                 }
                 .disabled(viewModel.errorMessage != nil)
 
+                Button("Export") {
+                    exportAudio()
+                }
+                .disabled(track.audioFilePath == nil)
+                .help("Export audio as AAC (.m4a)")
+
                 @Bindable var vm = viewModel
                 Toggle("Loop", isOn: $vm.isLooping)
                     .toggleStyle(.switch)
@@ -70,6 +81,45 @@ struct PlayerView: View {
             try? await Task.sleep(for: .milliseconds(200))
             guard !Task.isCancelled else { return }
             viewModel.load(path: track.audioFilePath)
+        }
+    }
+
+    private func exportAudio() {
+        guard let path = track.audioFilePath,
+              let sourceURL = FileUtilities.resolveAudioPath(path) else { return }
+
+        let panel = NSSavePanel()
+        panel.nameFieldStringValue = "\(track.title).m4a"
+        panel.canCreateDirectories = true
+        panel.allowedContentTypes = [UTType(filenameExtension: "m4a") ?? .audio]
+
+        guard panel.runModal() == .OK, let destinationURL = panel.url else { return }
+
+        Task.detached(priority: .userInitiated) {
+            do {
+                let sourceFile = try AVAudioFile(forReading: sourceURL)
+                let format = sourceFile.processingFormat
+                let frameCount = AVAudioFrameCount(sourceFile.length)
+
+                guard let buffer = AVAudioPCMBuffer(pcmFormat: format, frameCapacity: frameCount) else {
+                    await MainActor.run { self.exportError = "Export failed: could not allocate buffer" }
+                    return
+                }
+                try sourceFile.read(into: buffer)
+
+                let outputSettings: [String: Any] = [
+                    AVFormatIDKey: kAudioFormatMPEG4AAC,
+                    AVSampleRateKey: format.sampleRate,
+                    AVNumberOfChannelsKey: format.channelCount,
+                    AVEncoderBitRateKey: 256_000,
+                    AVEncoderAudioQualityKey: AVAudioQuality.max.rawValue
+                ]
+                let outputFile = try AVAudioFile(forWriting: destinationURL, settings: outputSettings)
+                try outputFile.write(from: buffer)
+                await MainActor.run { self.exportError = nil }
+            } catch {
+                await MainActor.run { self.exportError = "Export failed: \(error.localizedDescription)" }
+            }
         }
     }
 
