@@ -23,6 +23,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         onTerminate?()
     }
 
+    func applicationShouldTerminateAfterLastWindowClosed(_ sender: NSApplication) -> Bool {
+        true
+    }
+
     private func applyApplicationIcon() {
         let iconURLs = [
             Bundle.main.url(forResource: "AppIcon", withExtension: "icns"),
