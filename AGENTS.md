@@ -8,7 +8,7 @@ Cantis is a **fully native macOS application for AI music generation**. ACE-Step
 
 - **Platform:** macOS 26+ (Tahoe), Apple Silicon only
 - **Language:** Swift 6.2 (entire app); Python is used **only** by the offline weight converter (`tools/convert_weights.py`)
-- **Build system:** Swift Package Manager (no Xcode project file)
+- **Build system:** Swift Package Manager for development/CI; `Cantis.xcodeproj` for the bundled app
 - **UI framework:** SwiftUI with `@Observable`
 - **Persistence:** SwiftData (`GeneratedTrack`, `Preset`, `Tag`)
 - **Inference:** ACE-Step v1.5 ported to mlx-swift (DiT 2B + DC-HiFi-GAN VAE + Qwen3 text encoder + optional 5 Hz LM 0.6B)
@@ -201,7 +201,7 @@ Or open `Package.swift` in Xcode and run the `Cantis` target.
 
 ### Python (tooling only)
 
-`tools/convert_weights.py` and `modeling_acestep_v15_turbo.py` use PyTorch + safetensors. They are not exercised at runtime. Install requirements ad-hoc; there is no project-managed virtual environment.
+`tools/convert_weights.py` uses NumPy, safetensors, and huggingface_hub; its dependency guard is the source of truth. It handles the serialized silence latent without requiring PyTorch. The reference `modeling_acestep_v15_turbo.py` has its own PyTorch/model dependencies if executed directly. Neither is exercised by the app at runtime. See `docs/DEVELOPMENT.md` for an isolated conversion environment.
 
 ### System frameworks
 
@@ -284,7 +284,7 @@ Tests live in `CantisTests/`:
 
 ## Important Notes
 
-- **No Xcode project file** — the project uses SPM exclusively (`Package.swift`).
+- **Two build entry points** — `Package.swift` is used by CI; `Cantis.xcodeproj` is included for app-bundle/signing work. Keep deployment targets and dependency configuration consistent.
 - **Models are not in the repo** — converted MLX weights are downloaded into `~/Library/Application Support/Cantis/Models/` at runtime (Turbo / SFT / Base) or produced by `tools/convert_weights.py` (XL / custom).
 - **The app runs as an SPM executable** — `AppDelegate` promotes the process to a regular GUI application (menu bar, Dock icon).
 - **No Combine** — the codebase uses Swift structured concurrency (`async/await`, `Task`, `AsyncThrowingStream`).
