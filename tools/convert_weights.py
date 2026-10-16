@@ -27,6 +27,7 @@ from typing import Any, Dict, Optional
 # Dependency guard
 # ---------------------------------------------------------------------------
 
+
 def _check_deps() -> bool:
     missing = []
     for mod in ("numpy", "safetensors", "huggingface_hub"):
@@ -40,6 +41,7 @@ def _check_deps() -> bool:
         return False
     return True
 
+
 # ---------------------------------------------------------------------------
 # Key-name mapping: PyTorch DiT → Swift module hierarchy
 # ---------------------------------------------------------------------------
@@ -52,6 +54,7 @@ def _check_deps() -> bool:
 #   null_condition_emb       → nullConditionEmb
 #   tokenizer.*              → (skipped)
 # ---------------------------------------------------------------------------
+
 
 def _snake_to_camel(s: str) -> str:
     """Convert a single snake_case identifier to camelCase."""
@@ -74,30 +77,30 @@ def _remap_attn_key(rest: str) -> str:
 def _remap_encoder_layer_key(rest: str) -> str:
     """Remap keys inside an AceStepEncoderLayer."""
     seg_map = {
-        "input_layernorm":          "inputLayernorm",
+        "input_layernorm": "inputLayernorm",
         "post_attention_layernorm": "postAttentionLayernorm",
-        "self_attn":                "selfAttn",
-        "mlp":                      "mlp",
+        "self_attn": "selfAttn",
+        "mlp": "mlp",
     }
     # first segment is the sub-module name
     parts = rest.split(".", maxsplit=1)
-    head  = parts[0]
-    tail  = ("." + _camel_path(parts[1])) if len(parts) > 1 else ""
+    head = parts[0]
+    tail = ("." + _camel_path(parts[1])) if len(parts) > 1 else ""
     return seg_map.get(head, _snake_to_camel(head)) + tail
 
 
 def _remap_decoder_layer_key(rest: str) -> str:
     """Remap keys inside an AceStepDiTLayer."""
     parts = rest.split(".", maxsplit=1)
-    head  = parts[0]
-    tail  = ("." + _camel_path(parts[1])) if len(parts) > 1 else ""
+    head = parts[0]
+    tail = ("." + _camel_path(parts[1])) if len(parts) > 1 else ""
     seg_map = {
-        "self_attn_norm":  "selfAttnNorm",
-        "self_attn":       "selfAttn",
+        "self_attn_norm": "selfAttnNorm",
+        "self_attn": "selfAttn",
         "cross_attn_norm": "crossAttnNorm",
-        "cross_attn":      "crossAttn",
-        "mlp_norm":        "mlpNorm",
-        "mlp":             "mlp",
+        "cross_attn": "crossAttn",
+        "mlp_norm": "mlpNorm",
+        "mlp": "mlp",
         "scale_shift_table": "scaleShiftTable",
     }
     return seg_map.get(head, _snake_to_camel(head)) + tail
@@ -113,10 +116,10 @@ def _remap_decoder_key(rest: str) -> str:
 
     # proj_in.1.*  → projIn.*   (strip Sequential index .1.)
     if rest.startswith("proj_in.1."):
-        return "projIn." + rest[len("proj_in.1."):]
+        return "projIn." + rest[len("proj_in.1.") :]
     # proj_out.1.* → projOut.*
     if rest.startswith("proj_out.1."):
-        return "projOut." + rest[len("proj_out.1."):]
+        return "projOut." + rest[len("proj_out.1.") :]
 
     # Bare scale_shift_table
     if rest == "scale_shift_table":
@@ -125,13 +128,13 @@ def _remap_decoder_key(rest: str) -> str:
     # Named sub-modules: snake_case first segment → camelCase
     top_map = {
         "time_embed_r": "timeEmbedR",
-        "time_embed":   "timeEmbed",
+        "time_embed": "timeEmbed",
         "condition_embedder": "conditionEmbedder",
-        "norm_out":     "normOut",
+        "norm_out": "normOut",
     }
     parts = rest.split(".", maxsplit=1)
-    head  = parts[0]
-    tail  = ("." + _camel_path(parts[1])) if len(parts) > 1 else ""
+    head = parts[0]
+    tail = ("." + _camel_path(parts[1])) if len(parts) > 1 else ""
     return top_map.get(head, _snake_to_camel(head)) + tail
 
 
@@ -147,38 +150,49 @@ def _remap_dit_key(key: str) -> Optional[str]:
     # tokenizer.quantizer.project_in.*          → audioTokenizer.quantizer.projectIn.*
     # tokenizer.quantizer.project_out.*         → audioTokenizer.quantizer.projectOut.*
     if key.startswith("tokenizer."):
-        rest = key[len("tokenizer."):]
+        rest = key[len("tokenizer.") :]
         if rest.startswith("audio_acoustic_proj."):
-            return "audioTokenizer.audioAcousticProj." + rest[len("audio_acoustic_proj."):]
+            return (
+                "audioTokenizer.audioAcousticProj."
+                + rest[len("audio_acoustic_proj.") :]
+            )
         if rest.startswith("attention_pooler."):
-            sub = rest[len("attention_pooler."):]
+            sub = rest[len("attention_pooler.") :]
             m = re.match(r"^layers\.(\d+)\.(.+)$", sub)
             if m:
                 idx, layer_sub = m.group(1), m.group(2)
                 return f"audioTokenizer.attentionPooler.layers.{idx}.{_remap_encoder_layer_key(layer_sub)}"
             top_map = {
-                "embed_tokens":  "embedTokens",
+                "embed_tokens": "embedTokens",
                 "special_token": "specialToken",
-                "norm":          "norm",
+                "norm": "norm",
             }
             parts = sub.split(".", maxsplit=1)
-            head  = parts[0]
-            tail  = ("." + _camel_path(parts[1])) if len(parts) > 1 else ""
-            return "audioTokenizer.attentionPooler." + top_map.get(head, _snake_to_camel(head)) + tail
+            head = parts[0]
+            tail = ("." + _camel_path(parts[1])) if len(parts) > 1 else ""
+            return (
+                "audioTokenizer.attentionPooler."
+                + top_map.get(head, _snake_to_camel(head))
+                + tail
+            )
         if rest.startswith("quantizer."):
-            sub = rest[len("quantizer."):]
-            sub = sub.replace("project_in.", "projectIn.").replace("project_out.", "projectOut.")
+            sub = rest[len("quantizer.") :]
+            sub = sub.replace("project_in.", "projectIn.").replace(
+                "project_out.", "projectOut."
+            )
             return "audioTokenizer.quantizer." + sub
         # rotary_emb buffers etc. — runtime-derived in Swift, not loaded.
         return None
 
     # ── Skip components not needed for basic inference ─────────────────────
-    if key.startswith("encoder.attention_pooler."):  # only the audio tokenizer pooler is plumbed
+    if key.startswith(
+        "encoder.attention_pooler."
+    ):  # only the audio tokenizer pooler is plumbed
         return None
 
     # ── Timbre encoder (encoder.timbre_encoder.*) → timbreEncoder.* ────────
     if key.startswith("encoder.timbre_encoder."):
-        rest = key[len("encoder.timbre_encoder."):]
+        rest = key[len("encoder.timbre_encoder.") :]
         m = re.match(r"^layers\.(\d+)\.(.+)$", rest)
         if m:
             idx, sub = m.group(1), m.group(2)
@@ -189,8 +203,8 @@ def _remap_dit_key(key: str) -> Optional[str]:
             "norm": "norm",
         }
         parts = rest.split(".", maxsplit=1)
-        head  = parts[0]
-        tail  = ("." + _camel_path(parts[1])) if len(parts) > 1 else ""
+        head = parts[0]
+        tail = ("." + _camel_path(parts[1])) if len(parts) > 1 else ""
         return "timbreEncoder." + top_map.get(head, _snake_to_camel(head)) + tail
 
     # ── Null condition embedding ────────────────────────────────────────────
@@ -200,19 +214,19 @@ def _remap_dit_key(key: str) -> Optional[str]:
     # ── Text projector (encoder.text_projector.weight, no bias) ─────────────
     # Linear(text_hidden_dim=1024 → hidden_size=2048).
     if key.startswith("encoder.text_projector."):
-        return "textProjector." + key[len("encoder.text_projector."):]
+        return "textProjector." + key[len("encoder.text_projector.") :]
 
     # ── Decoder (AceStepDiTModel) ───────────────────────────────────────────
     if key.startswith("decoder."):
-        rest = key[len("decoder."):]
+        rest = key[len("decoder.") :]
         return "decoder." + _remap_decoder_key(rest)
 
     # ── Lyric encoder (encoder.lyric_encoder.*) → lyricEncoder.* ───────────
     if key.startswith("encoder.lyric_encoder."):
-        rest = key[len("encoder.lyric_encoder."):]
+        rest = key[len("encoder.lyric_encoder.") :]
         parts = rest.split(".", maxsplit=1)
-        head  = parts[0]
-        tail  = ("." + parts[1]) if len(parts) > 1 else ""
+        head = parts[0]
+        tail = ("." + parts[1]) if len(parts) > 1 else ""
 
         # layers.N.* → recurse through encoder-layer remapper
         m = re.match(r"^layers\.(\d+)\.(.+)$", rest)
@@ -221,13 +235,15 @@ def _remap_dit_key(key: str) -> Optional[str]:
             return f"lyricEncoder.layers.{idx}.{_remap_encoder_layer_key(sub)}"
 
         top_map = {"embed_tokens": "embedTokens", "norm": "norm"}
-        return "lyricEncoder." + top_map.get(head, _snake_to_camel(head)) + (
-            "." + _camel_path(tail[1:]) if tail else ""
+        return (
+            "lyricEncoder."
+            + top_map.get(head, _snake_to_camel(head))
+            + ("." + _camel_path(tail[1:]) if tail else "")
         )
 
     # ── Detokenizer (AudioTokenDetokenizer) ────────────────────────────────
     if key.startswith("detokenizer."):
-        rest = key[len("detokenizer."):]
+        rest = key[len("detokenizer.") :]
 
         m = re.match(r"^layers\.(\d+)\.(.+)$", rest)
         if m:
@@ -241,10 +257,12 @@ def _remap_dit_key(key: str) -> Optional[str]:
             "norm": "norm",
         }
         parts = rest.split(".", maxsplit=1)
-        head  = parts[0]
-        tail  = ("." + parts[1]) if len(parts) > 1 else ""
-        return "detokenizer." + top_map.get(head, _snake_to_camel(head)) + (
-            "." + _camel_path(tail[1:]) if tail else ""
+        head = parts[0]
+        tail = ("." + parts[1]) if len(parts) > 1 else ""
+        return (
+            "detokenizer."
+            + top_map.get(head, _snake_to_camel(head))
+            + ("." + _camel_path(tail[1:]) if tail else "")
         )
 
     print(f"  [unknown dit] {key}", file=sys.stderr)
@@ -254,20 +272,20 @@ def _remap_dit_key(key: str) -> Optional[str]:
 # Block-level remap shared by the 5Hz LM and the Qwen3-Embedding text encoder.
 # Both are Qwen3-derived: same RMSNorm + GQA + RoPE + SwiGLU MLP layout.
 _QWEN3_BLOCK_MAP: Dict[str, str] = {
-    "input_layernorm.weight":          "inputLayernorm.weight",
+    "input_layernorm.weight": "inputLayernorm.weight",
     "post_attention_layernorm.weight": "postAttentionLayernorm.weight",
-    "self_attn.q_proj.weight":         "selfAttn.qProj.weight",
-    "self_attn.q_proj.bias":           "selfAttn.qProj.bias",
-    "self_attn.k_proj.weight":         "selfAttn.kProj.weight",
-    "self_attn.k_proj.bias":           "selfAttn.kProj.bias",
-    "self_attn.v_proj.weight":         "selfAttn.vProj.weight",
-    "self_attn.v_proj.bias":           "selfAttn.vProj.bias",
-    "self_attn.o_proj.weight":         "selfAttn.oProj.weight",
-    "self_attn.q_norm.weight":         "selfAttn.qNorm.weight",
-    "self_attn.k_norm.weight":         "selfAttn.kNorm.weight",
-    "mlp.gate_proj.weight":            "mlp.gateProj.weight",
-    "mlp.up_proj.weight":              "mlp.upProj.weight",
-    "mlp.down_proj.weight":            "mlp.downProj.weight",
+    "self_attn.q_proj.weight": "selfAttn.qProj.weight",
+    "self_attn.q_proj.bias": "selfAttn.qProj.bias",
+    "self_attn.k_proj.weight": "selfAttn.kProj.weight",
+    "self_attn.k_proj.bias": "selfAttn.kProj.bias",
+    "self_attn.v_proj.weight": "selfAttn.vProj.weight",
+    "self_attn.v_proj.bias": "selfAttn.vProj.bias",
+    "self_attn.o_proj.weight": "selfAttn.oProj.weight",
+    "self_attn.q_norm.weight": "selfAttn.qNorm.weight",
+    "self_attn.k_norm.weight": "selfAttn.kNorm.weight",
+    "mlp.gate_proj.weight": "mlp.gateProj.weight",
+    "mlp.up_proj.weight": "mlp.upProj.weight",
+    "mlp.down_proj.weight": "mlp.downProj.weight",
 }
 
 
@@ -275,7 +293,7 @@ def _remap_lm_key(key: str) -> Optional[str]:
     """Map a Qwen2/Qwen3-style LM key (with `model.` prefix) to Swift module path."""
     lm_map = {
         "model.norm.weight": "norm.weight",
-        "lm_head.weight":    "lmHead.weight",
+        "lm_head.weight": "lmHead.weight",
     }
     if key in lm_map:
         return lm_map[key]
@@ -347,12 +365,13 @@ def _remap_text_encoder_key(key: str) -> Optional[str]:
 #   encoder.conv2.*           → encoder.conv2.*
 # ---------------------------------------------------------------------------
 
+
 def _remap_vae_key(key: str) -> Optional[str]:
     """Map a VAE encoder/decoder key (after weight_norm fusion) to its Swift path."""
     for prefix, swift_root in (("decoder.", "decoder"), ("encoder.", "encoder")):
         if not key.startswith(prefix):
             continue
-        rest = key[len(prefix):]
+        rest = key[len(prefix) :]
 
         # Top-level tensors: conv1, conv2, snake1 sit directly under the root.
         for tok in ("conv1.", "conv2.", "snake1."):
@@ -380,8 +399,12 @@ def _remap_vae_key(key: str) -> Optional[str]:
 # HuggingFace download helpers
 # ---------------------------------------------------------------------------
 
-def _download(repo_id: str, filename: str, local_dir: Path, token: Optional[str]) -> Path:
+
+def _download(
+    repo_id: str, filename: str, local_dir: Path, token: Optional[str]
+) -> Path:
     from huggingface_hub import hf_hub_download
+
     print(f"  Downloading {repo_id}/{filename} …")
     path = hf_hub_download(
         repo_id=repo_id,
@@ -392,9 +415,15 @@ def _download(repo_id: str, filename: str, local_dir: Path, token: Optional[str]
     return Path(path)
 
 
-def _download_dir(repo_id: str, subdir: Optional[str], local_dir: Path, token: Optional[str],
-                  patterns: list[str]) -> None:
+def _download_dir(
+    repo_id: str,
+    subdir: Optional[str],
+    local_dir: Path,
+    token: Optional[str],
+    patterns: list[str],
+) -> None:
     from huggingface_hub import snapshot_download
+
     allow = patterns
     ignore = None
     print(f"  Downloading {repo_id} {'/' + subdir if subdir else ''} …")
@@ -410,6 +439,7 @@ def _download_dir(repo_id: str, subdir: Optional[str], local_dir: Path, token: O
 # ---------------------------------------------------------------------------
 # bfloat16-aware safetensors loader (numpy has no bfloat16)
 # ---------------------------------------------------------------------------
+
 
 def _load_safetensors_numpy(path: Path) -> Dict[str, Any]:
     """Read a safetensors file into a dict of numpy float32 arrays.
@@ -446,8 +476,14 @@ def _load_safetensors_numpy(path: Path) -> Dict[str, Any]:
             arr = np.frombuffer(raw, dtype=np.float64).reshape(shape).astype(np.float32)
         elif dtype_str in ("I64", "I32", "I16", "I8", "U8", "BOOL"):
             # Keep integer tensors as-is (embeddings, position ids, etc.)
-            np_dtype = {"I64": np.int64, "I32": np.int32, "I16": np.int16,
-                        "I8": np.int8, "U8": np.uint8, "BOOL": np.bool_}[dtype_str]
+            np_dtype = {
+                "I64": np.int64,
+                "I32": np.int32,
+                "I16": np.int16,
+                "I8": np.int8,
+                "U8": np.uint8,
+                "BOOL": np.bool_,
+            }[dtype_str]
             arr = np.frombuffer(raw, dtype=np_dtype).reshape(shape).copy()
         else:
             raise ValueError(f"Unsupported safetensors dtype: {dtype_str} (key={key})")
@@ -459,6 +495,7 @@ def _load_safetensors_numpy(path: Path) -> Dict[str, Any]:
 # ---------------------------------------------------------------------------
 # Sharded safetensors loader (XL checkpoints: 4 × ~5 GB shards)
 # ---------------------------------------------------------------------------
+
 
 def _load_sharded_safetensors_numpy(shard_dir: Path) -> Dict[str, Any]:
     """Load a sharded safetensors checkpoint (model.safetensors.index.json + shards).
@@ -489,18 +526,26 @@ def _load_sharded_safetensors_numpy(shard_dir: Path) -> Dict[str, Any]:
 # Conversion
 # ---------------------------------------------------------------------------
 
+
 def _needs_conv1d_transpose(new_key: str, shape: tuple) -> bool:
     """True for Conv1d weight: PyTorch [out, in, k] → MLX [out, k, in]."""
-    return len(shape) == 3 and new_key.endswith(".weight") and (
-        "projIn.weight" in new_key or "projOut.weight" in new_key
+    return (
+        len(shape) == 3
+        and new_key.endswith(".weight")
+        and ("projIn.weight" in new_key or "projOut.weight" in new_key)
     )
+
 
 def _needs_convT1d_transpose(new_key: str, shape: tuple) -> bool:
     """True for ConvTranspose1d weight: PyTorch [in, out, k] → MLX [out, k, in]."""
-    return len(shape) == 3 and new_key.endswith(".weight") and "projOut.weight" in new_key
+    return (
+        len(shape) == 3 and new_key.endswith(".weight") and "projOut.weight" in new_key
+    )
 
 
-def convert_dit(src: Path, output_dir: Path, dtype_str: str, sharded: bool = False) -> bool:
+def convert_dit(
+    src: Path, output_dir: Path, dtype_str: str, sharded: bool = False
+) -> bool:
     """Convert a DiT checkpoint (single file or sharded) to MLX safetensors.
 
     `src` is either:
@@ -527,7 +572,7 @@ def convert_dit(src: Path, output_dir: Path, dtype_str: str, sharded: bool = Fal
     print(f"  Source tensors: {len(keys)}")
     for key in keys:
         tensor = source[key]
-        shape  = tuple(tensor.shape)
+        shape = tuple(tensor.shape)
         new_key = _remap_dit_key(key)
         if new_key is None:
             skipped += 1
@@ -566,14 +611,18 @@ def convert_silence_latent(src_pt: Path, output_dir: Path, dtype_str: str) -> bo
 
     print(f"  Converting {src_pt.name} …")
     with zipfile.ZipFile(src_pt, "r") as zf:
-        data_member = next((name for name in zf.namelist() if name.endswith("/data/0")), None)
+        data_member = next(
+            (name for name in zf.namelist() if name.endswith("/data/0")), None
+        )
         if data_member is None:
             raise ValueError(f"{src_pt} does not look like a torch zip tensor archive")
         raw = zf.read(data_member)
 
     tensor = np.frombuffer(raw, dtype="<f4").copy()
     if tensor.size % 64 != 0:
-        raise ValueError(f"silence_latent element count {tensor.size} is not divisible by 64")
+        raise ValueError(
+            f"silence_latent element count {tensor.size} is not divisible by 64"
+        )
 
     frames = tensor.size // 64
     tensor = tensor.reshape(1, 64, frames).transpose(0, 2, 1)
@@ -587,7 +636,9 @@ def convert_silence_latent(src_pt: Path, output_dir: Path, dtype_str: str) -> bo
     return True
 
 
-def convert_text_encoder(src_safetensors: Path, output_dir: Path, dtype_str: str) -> bool:
+def convert_text_encoder(
+    src_safetensors: Path, output_dir: Path, dtype_str: str
+) -> bool:
     """Convert Qwen3-Embedding-0.6B to MLX-native safetensors.
 
     Used by the DiT for text/lyric conditioning (`encoder.lyric_encoder.embed_tokens` and
@@ -629,9 +680,15 @@ def convert_text_encoder(src_safetensors: Path, output_dir: Path, dtype_str: str
 def copy_text_tokenizer(src_dir: Path, output_dir: Path) -> None:
     """Copy Qwen3-Embedding tokenizer files with `text_` prefix to avoid LM-tokenizer collision."""
     output_dir.mkdir(parents=True, exist_ok=True)
-    for name in ["tokenizer.json", "tokenizer_config.json", "vocab.json",
-                 "merges.txt", "special_tokens_map.json", "added_tokens.json",
-                 "config.json"]:
+    for name in [
+        "tokenizer.json",
+        "tokenizer_config.json",
+        "vocab.json",
+        "merges.txt",
+        "special_tokens_map.json",
+        "added_tokens.json",
+        "config.json",
+    ]:
         src = src_dir / name
         if src.exists():
             dst = output_dir / ("text_" + name)
@@ -677,6 +734,7 @@ def convert_lm(src_safetensors: Path, output_dir: Path, dtype_str: str) -> bool:
 def _fuse_weight_norm(v: "np.ndarray", g: "np.ndarray") -> "np.ndarray":
     """Fuse PyTorch weight_norm: w = g * v / ‖v‖₂  (norm over all dims except axis 0)."""
     import numpy as np
+
     norm = np.sqrt((v * v).sum(axis=tuple(range(1, v.ndim)), keepdims=True))
     return g * v / (norm + 1e-8)
 
@@ -709,7 +767,7 @@ def convert_vae(src_safetensors: Path, output_dir: Path, dtype_str: str) -> bool
             continue  # skip anything outside encoder/decoder
 
         if key.endswith(".weight_v"):
-            base  = key[: -len(".weight_v")]
+            base = key[: -len(".weight_v")]
             g_key = base + ".weight_g"
             v = tensors[key]
             g = tensors.get(g_key)
@@ -764,9 +822,16 @@ def convert_vae(src_safetensors: Path, output_dir: Path, dtype_str: str) -> bool
 def copy_tokenizer(src_dir: Path, output_dir: Path) -> None:
     """Copy tokenizer files to output LM directory."""
     output_dir.mkdir(parents=True, exist_ok=True)
-    for name in ["tokenizer.json", "tokenizer_config.json", "vocab.json",
-                 "merges.txt", "special_tokens_map.json", "added_tokens.json",
-                 "chat_template.jinja", "config.json"]:
+    for name in [
+        "tokenizer.json",
+        "tokenizer_config.json",
+        "vocab.json",
+        "merges.txt",
+        "special_tokens_map.json",
+        "added_tokens.json",
+        "chat_template.jinja",
+        "config.json",
+    ]:
         src = src_dir / name
         if src.exists():
             dst = output_dir / ("lm_" + name)
@@ -786,18 +851,19 @@ def inspect_file(path: Path) -> None:
 # End-to-end validation
 # ---------------------------------------------------------------------------
 
+
 def validate_output(output_dir: Path) -> bool:
-    dit_path     = output_dir / "dit" / "dit_weights.safetensors"
+    dit_path = output_dir / "dit" / "dit_weights.safetensors"
     silence_path = output_dir / "dit" / "silence_latent.safetensors"
-    lm_path      = output_dir / "lm"  / "lm_weights.safetensors"
-    vae_path     = output_dir / "vae" / "vae_weights.safetensors"
-    text_path    = output_dir / "text" / "text_weights.safetensors"
+    lm_path = output_dir / "lm" / "lm_weights.safetensors"
+    vae_path = output_dir / "vae" / "vae_weights.safetensors"
+    text_path = output_dir / "text" / "text_weights.safetensors"
 
     ok = True
     for label, path, expected_min in [
         ("DiT", dit_path, 100),
         ("Silence latent", silence_path, 1),
-        ("LM",  lm_path,  50),
+        ("LM", lm_path, 50),
         ("VAE", vae_path, 50),
         ("Text encoder", text_path, 100),
     ]:
@@ -809,7 +875,10 @@ def validate_output(output_dir: Path) -> bool:
         size_mb = path.stat().st_size / 1e6
         print(f"  {label}: {len(keys)} tensors, {size_mb:.0f} MB")
         if len(keys) < expected_min:
-            print(f"  ✗ {label}: only {len(keys)} tensors (expected ≥ {expected_min})", file=sys.stderr)
+            print(
+                f"  ✗ {label}: only {len(keys)} tensors (expected ≥ {expected_min})",
+                file=sys.stderr,
+            )
             ok = False
         else:
             print(f"  ✓ {label}: tensor count OK")
@@ -847,7 +916,10 @@ def validate_output(output_dir: Path) -> bool:
         elif len(latent.shape) == 3 and latent.shape[0] == 1 and latent.shape[2] == 64:
             print(f"  ✓ Silence latent shape OK: {list(latent.shape)}")
         else:
-            print(f"  ✗ Silence latent shape invalid: {list(latent.shape)}", file=sys.stderr)
+            print(
+                f"  ✗ Silence latent shape invalid: {list(latent.shape)}",
+                file=sys.stderr,
+            )
             ok = False
 
     # Check for critical LM keys
@@ -901,48 +973,48 @@ _MODELS_DIR = Path.home() / "Library" / "Application Support" / "Cantis" / "Mode
 _VARIANT_CONFIG = {
     # Turbo: subdir in the multi-variant ACE-Step/Ace-Step1.5 repo.
     "turbo": {
-        "dit_repo":    "ACE-Step/Ace-Step1.5",
-        "dit_subdir":  "acestep-v15-turbo",
+        "dit_repo": "ACE-Step/Ace-Step1.5",
+        "dit_subdir": "acestep-v15-turbo",
         "output_name": "ace-step-v1.5-mlx",
-        "sharded":     False,
-        "xl":          False,
+        "sharded": False,
+        "xl": False,
     },
     # SFT / base: standalone repos at the ACE-Step org root.
     "sft": {
-        "dit_repo":    "ACE-Step/acestep-v15-sft",
-        "dit_subdir":  None,
+        "dit_repo": "ACE-Step/acestep-v15-sft",
+        "dit_subdir": None,
         "output_name": "ace-step-v1.5-sft-mlx",
-        "sharded":     False,
-        "xl":          False,
+        "sharded": False,
+        "xl": False,
     },
     "base": {
-        "dit_repo":    "ACE-Step/acestep-v15-base",
-        "dit_subdir":  None,
+        "dit_repo": "ACE-Step/acestep-v15-base",
+        "dit_subdir": None,
         "output_name": "ace-step-v1.5-base-mlx",
-        "sharded":     False,
-        "xl":          False,
+        "sharded": False,
+        "xl": False,
     },
     # XL: standalone repos, 4-shard safetensors.
     "xl-turbo": {
-        "dit_repo":    "ACE-Step/acestep-v15-xl-turbo",
-        "dit_subdir":  None,
+        "dit_repo": "ACE-Step/acestep-v15-xl-turbo",
+        "dit_subdir": None,
         "output_name": "ace-step-v1.5-xl-turbo-mlx",
-        "sharded":     True,
-        "xl":          True,
+        "sharded": True,
+        "xl": True,
     },
     "xl-sft": {
-        "dit_repo":    "ACE-Step/acestep-v15-xl-sft",
-        "dit_subdir":  None,
+        "dit_repo": "ACE-Step/acestep-v15-xl-sft",
+        "dit_subdir": None,
         "output_name": "ace-step-v1.5-xl-sft-mlx",
-        "sharded":     True,
-        "xl":          True,
+        "sharded": True,
+        "xl": True,
     },
     "xl-base": {
-        "dit_repo":    "ACE-Step/acestep-v15-xl-base",
-        "dit_subdir":  None,
+        "dit_repo": "ACE-Step/acestep-v15-xl-base",
+        "dit_subdir": None,
         "output_name": "ace-step-v1.5-xl-base-mlx",
-        "sharded":     True,
-        "xl":          True,
+        "sharded": True,
+        "xl": True,
     },
 }
 
@@ -972,7 +1044,9 @@ def _symlink_shared_components(out_dir: Path, turbo_dir: Path) -> None:
             os.symlink(rel, dst)
             print(f"  Symlinked {subdir}/ → {rel}")
         else:
-            print(f"  WARNING: turbo {subdir}/ not found at {src} — run turbo conversion first.")
+            print(
+                f"  WARNING: turbo {subdir}/ not found at {src} — run turbo conversion first."
+            )
 
 
 def main() -> int:
@@ -984,8 +1058,8 @@ def main() -> int:
         choices=list(_VARIANT_CONFIG.keys()),
         default="turbo",
         help="Which DiT checkpoint to convert (default: turbo). All non-turbo variants "
-             "symlink shared components (VAE/LM/text/silence_latent) from the turbo "
-             "output directory, so convert turbo first.",
+        "symlink shared components (VAE/LM/text/silence_latent) from the turbo "
+        "output directory, so convert turbo first.",
     )
     parser.add_argument(
         "--output-dir",
@@ -1017,16 +1091,19 @@ def main() -> int:
         "--skip-dit", action="store_true", help="Skip DiT download + conversion"
     )
     parser.add_argument(
-        "--skip-lm", action="store_true",
-        help="Skip LM download + conversion (ignored for non-turbo variants — shared via symlink)"
+        "--skip-lm",
+        action="store_true",
+        help="Skip LM download + conversion (ignored for non-turbo variants — shared via symlink)",
     )
     parser.add_argument(
-        "--skip-vae", action="store_true",
-        help="Skip VAE download + conversion (ignored for non-turbo variants — shared via symlink)"
+        "--skip-vae",
+        action="store_true",
+        help="Skip VAE download + conversion (ignored for non-turbo variants — shared via symlink)",
     )
     parser.add_argument(
-        "--skip-text", action="store_true",
-        help="Skip text-encoder download + conversion (ignored for non-turbo variants — shared via symlink)"
+        "--skip-text",
+        action="store_true",
+        help="Skip text-encoder download + conversion (ignored for non-turbo variants — shared via symlink)",
     )
     parser.add_argument(
         "--cache-dir",
@@ -1038,12 +1115,12 @@ def main() -> int:
     if not _check_deps():
         return 1
 
-    variant    = args.variant
-    vcfg       = _VARIANT_CONFIG[variant]
-    out_dir    = Path(args.output_dir) if args.output_dir else default_output_dir(variant)
-    turbo_dir  = _MODELS_DIR / _VARIANT_CONFIG["turbo"]["output_name"]
-    cache_dir  = Path(args.cache_dir)
-    token      = args.hf_token
+    variant = args.variant
+    vcfg = _VARIANT_CONFIG[variant]
+    out_dir = Path(args.output_dir) if args.output_dir else default_output_dir(variant)
+    turbo_dir = _MODELS_DIR / _VARIANT_CONFIG["turbo"]["output_name"]
+    cache_dir = Path(args.cache_dir)
+    token = args.hf_token
 
     # ── Validate-only mode ────────────────────────────────────────────────────
     if args.validate_only:
@@ -1054,7 +1131,7 @@ def main() -> int:
     # ── Inspect-only mode ─────────────────────────────────────────────────────
     if args.inspect_only:
         dit_src = cache_dir / "dit" / "model.safetensors"
-        lm_src  = cache_dir / "lm"  / "model.safetensors"
+        lm_src = cache_dir / "lm" / "model.safetensors"
         if dit_src.exists():
             inspect_file(dit_src)
         if lm_src.exists():
@@ -1067,15 +1144,15 @@ def main() -> int:
     # Determine the local cache directory for this variant's raw downloads.
     # Turbo: subdir inside ACE-Step/Ace-Step1.5 → cache under its subdir name.
     # All others: standalone repos → cache under the variant name.
-    dit_subdir    = vcfg["dit_subdir"]
-    dit_repo      = vcfg["dit_repo"]
-    is_sharded    = vcfg["sharded"]
-    is_standalone = dit_subdir is None   # True for SFT, base, and all XL variants
-    dit_cache     = cache_dir / "dit" / (variant if is_standalone else dit_subdir)
+    dit_subdir = vcfg["dit_subdir"]
+    dit_repo = vcfg["dit_repo"]
+    is_sharded = vcfg["sharded"]
+    is_standalone = dit_subdir is None  # True for SFT, base, and all XL variants
+    dit_cache = cache_dir / "dit" / (variant if is_standalone else dit_subdir)
 
     if not args.skip_dit:
         if is_sharded:
-            index_file  = dit_cache / "model.safetensors.index.json"
+            index_file = dit_cache / "model.safetensors.index.json"
             single_file = dit_cache / "model.safetensors"
             if not index_file.exists() and not single_file.exists():
                 print(f"\n[DiT] Downloading sharded {dit_repo} …")
@@ -1091,7 +1168,9 @@ def main() -> int:
                 ok &= convert_dit(dit_cache, out_dir / "dit", args.dtype, sharded=True)
             elif single_file.exists():
                 print(f"\n[DiT] Converting → {out_dir}/dit/ …")
-                ok &= convert_dit(single_file, out_dir / "dit", args.dtype, sharded=False)
+                ok &= convert_dit(
+                    single_file, out_dir / "dit", args.dtype, sharded=False
+                )
             else:
                 print(f"ERROR: DiT weights not found in {dit_cache}", file=sys.stderr)
                 ok = False
@@ -1128,18 +1207,19 @@ def main() -> int:
         if silence_src.exists():
             ok &= convert_silence_latent(silence_src, out_dir / "dit", args.dtype)
         else:
-            print(f"ERROR: silence_latent.pt not found at {silence_src}", file=sys.stderr)
+            print(
+                f"ERROR: silence_latent.pt not found at {silence_src}", file=sys.stderr
+            )
             ok = False
 
     # ── Shared components: convert for turbo, symlink for others ─────────────
     is_turbo = variant == "turbo"
 
     if is_turbo:
-
         # ── LM conversion ─────────────────────────────────────────────────────
         if not args.skip_lm:
             lm_cache = cache_dir / "lm"
-            lm_src   = lm_cache / "model.safetensors"
+            lm_src = lm_cache / "model.safetensors"
 
             if not lm_src.exists():
                 print(f"\n[LM] Downloading from ACE-Step/acestep-5Hz-lm-0.6B …")
@@ -1162,7 +1242,7 @@ def main() -> int:
         # ── VAE conversion ────────────────────────────────────────────────────
         if not args.skip_vae:
             vae_cache = cache_dir / "vae"
-            vae_src   = vae_cache / "vae" / "diffusion_pytorch_model.safetensors"
+            vae_src = vae_cache / "vae" / "diffusion_pytorch_model.safetensors"
 
             if not vae_src.exists():
                 print(f"\n[VAE] Downloading from ACE-Step/Ace-Step1.5 …")
@@ -1183,10 +1263,12 @@ def main() -> int:
         # ── Text encoder conversion (Qwen3-Embedding-0.6B) ───────────────────
         if not args.skip_text:
             text_cache = cache_dir / "text"
-            text_src   = text_cache / "Qwen3-Embedding-0.6B" / "model.safetensors"
+            text_src = text_cache / "Qwen3-Embedding-0.6B" / "model.safetensors"
 
             if not text_src.exists():
-                print(f"\n[Text] Downloading Qwen3-Embedding-0.6B from ACE-Step/Ace-Step1.5 …")
+                print(
+                    f"\n[Text] Downloading Qwen3-Embedding-0.6B from ACE-Step/Ace-Step1.5 …"
+                )
                 _download_dir(
                     repo_id="ACE-Step/Ace-Step1.5",
                     subdir="Qwen3-Embedding-0.6B",
@@ -1200,7 +1282,10 @@ def main() -> int:
                 ok &= convert_text_encoder(text_src, out_dir / "text", args.dtype)
                 copy_text_tokenizer(text_src.parent, out_dir / "text")
             else:
-                print(f"ERROR: Text-encoder weights not found at {text_src}", file=sys.stderr)
+                print(
+                    f"ERROR: Text-encoder weights not found at {text_src}",
+                    file=sys.stderr,
+                )
                 ok = False
 
     else:
