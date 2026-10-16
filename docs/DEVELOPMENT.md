@@ -12,7 +12,7 @@
 
 ### From Xcode
 
-Open `Package.swift` in Xcode, select the `Cantis` executable target, and run (Cmd+R).
+Open `Package.swift` in Xcode, select the `Cantis` executable target, and run (Cmd+R). For the bundled app and signing settings, open `Cantis.xcodeproj`. Both currently target macOS 26. SPM executables do not inherit the Xcode app target's sandbox entitlements.
 
 ### From the terminal
 
@@ -30,11 +30,17 @@ After that, generation runs locally in the same process — there is no server, 
 
 ## Converting XL or Custom Weights
 
-The Turbo, SFT, and Base variants are pre-converted and download from HuggingFace directly. The XL variants and any custom checkpoints require a one-shot conversion from the original PyTorch weights:
+The Turbo, SFT, and Base variants are pre-converted and download from HuggingFace directly. The converter includes XL targets, although `DiTVariant.isAvailable` currently hides XL from the standard model picker. Treat XL conversion as developer tooling, not a supported in-app selection. Non-turbo variants share Turbo components, so prepare Turbo first:
 
 ```bash
+python3 -m venv .venv
+source .venv/bin/activate
+python -m pip install numpy safetensors huggingface_hub
+python tools/convert_weights.py --variant turbo
 python tools/convert_weights.py --variant xl-turbo
 ```
+
+The converter reads safetensors and the serialized silence latent without a runtime PyTorch dependency. Raw downloads are cached under `~/.cache/cantis-weights`; allow room for source and converted files. `--help` lists cache/output/dtype options.
 
 Output is written into `~/Library/Application Support/Cantis/Models/<variant-directory>/`. See `tools/convert_weights.py` for flags and `modeling_acestep_v15_turbo.py` for the reference PyTorch model used by the converter.
 
@@ -202,7 +208,7 @@ Run the MLX integration suites from Xcode if your change touches `Cantis/Inferen
 
 - **Setup overlay sticks at "downloading"**: check the Cantis log window (Window > Cantis Logs) for HTTP errors. Downloads are resumable — quit and re-launch and the engine will pick up where it left off.
 - **`weightsNotFound` error after download**: confirm every file listed in `NativeInferenceEngine.isDownloaded(_:)` is present under `~/Library/Application Support/Cantis/Models/<variant>/`. Non-turbo variants symlink into the turbo directory; if you deleted the turbo bundle, re-download it.
-- **`Run python tools/convert_weights.py …` error in Settings**: you selected an XL variant. Run the converter once and re-launch.
+- **XL variant missing in Settings**: XL targets exist in conversion tooling but are filtered out of the standard model picker by `DiTVariant.isAvailable`.
 - **Resident memory grows across generations**: enable Settings → Low-memory mode; it halves the MLX cache limit. Also confirm "Load 5 Hz LM" is off unless you actually need it (~1.2 GB extra).
 - **App not appearing in Dock**: the SPM executable relies on `AppDelegate` to set `setActivationPolicy(.regular)`. Make sure `CantisApp.swift` still uses `@NSApplicationDelegateAdaptor`.
 - **`swift build` complains about SDK version**: you need Xcode 26 or the macOS 26 SDK. CI runs on `macos-26` for the same reason.

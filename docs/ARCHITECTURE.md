@@ -4,24 +4,19 @@
 
 Cantis is a single-process, fully native macOS application. The SwiftUI app and the inference engine run in the same Swift binary; there is no Python backend, no IPC layer, and no HTTP server. Inference runs on Apple Silicon via [mlx-swift](https://github.com/ml-explore/mlx-swift).
 
-```
-┌──────────────────────────────────────────────────┐
-│           SwiftUI Views + ViewModels              │
-│    (@Observable, @Environment, @Query)            │
-├──────────────────────────────────────────────────┤
-│              Service Layer                        │
-│  AudioPlayerService · AudioExportService          │
-│  HistoryService · PresetService                   │
-│  ModelDownloader (actor) · ModelManagerService    │
-│  PlaybackDiagnosticsService                       │
-├──────────────────────────────────────────────────┤
-│           SwiftData Persistence                   │
-│  GeneratedTrack · Preset · Tag                    │
-├──────────────────────────────────────────────────┤
-│            NativeInferenceEngine                  │
-│   ACE-Step v1.5 DiT + VAE + Qwen3 + (LM)          │
-│            mlx-swift (Metal / ANE)                │
-└──────────────────────────────────────────────────┘
+```mermaid
+flowchart TD
+    UI[SwiftUI views and ViewModels] --> Engine[NativeInferenceEngine]
+    UI --> Services[Playback, export, history, presets]
+    Services --> DB[SwiftData local persistence]
+    Download[ModelDownloader] --> Weights[Local MLX weights]
+    HF[Hugging Face] --> Download
+    Weights --> Engine
+    Engine --> Qwen[Qwen3 text conditioning]
+    Qwen --> DiT[ACE-Step DiT sampling]
+    DiT --> VAE[Audio VAE decode]
+    VAE --> Audio[Local WAV files]
+    Audio --> Services
 ```
 
 ## High-Level Components
@@ -59,7 +54,7 @@ Cantis is a single-process, fully native macOS application. The SwiftUI app and 
 Injected via `@Environment` from `CantisApp.init()`:
 
 - **`AudioPlayerService`** — `AVAudioEngine` wrapper, waveform data, real-time FFT
-- **`AudioExportService`** — audio export via `AVAssetWriter`. WAV is a passthrough copy; AAC and ALAC are transcoded to `.m4a`. FLAC and MP3 are intentionally rejected with `AudioExportError.unsupported` because `AVAssetWriter` does not support them.
+- **`AudioExportService`** — WAV export copies the source file; AAC and ALAC are transcoded to `.m4a` through `AVAudioFile`. The UI filters formats using `AudioExportFormat.isAvailable`; MP3 and FLAC are unavailable in the supported picker.
 - **`HistoryService`** — SwiftData CRUD for `GeneratedTrack`, search, favorites, orphan reconciliation
 - **`PresetService`** — preset CRUD, bundle bootstrap
 - **`ModelDownloader`** (`actor`) — sequential, resumable HuggingFace downloads with weighted progress, post-download symlinking for variants that share components
@@ -127,7 +122,7 @@ Inference/
 | `turbo` | 8 (≤20) | yes | yes | Default; ships full bundle (DiT + LM + VAE + text) |
 | `sft` | 60 (≤100) | no | yes | DiT-only; symlinks `lm/`, `vae/`, `text/` from turbo |
 | `base` | 60 (≤100) | no | yes | DiT-only; symlinks shared components |
-| `xl-turbo` / `xl-sft` / `xl-base` | — | — | no | Require `tools/convert_weights.py` |
+| `xl-turbo` / `xl-sft` / `xl-base` | — | — | no | Converter targets; not available in the standard model picker |
 
 CFG-distilled variants (Turbo) ignore `cfgScale > 1`. Base / SFT use a twin-pass CFG sampler.
 
@@ -188,7 +183,7 @@ notDownloaded ──▶ downloading(progress) ──▶ downloaded ──▶ loa
 
 ## Model Storage and Downloads
 
-- Root: `~/Library/Application Support/Cantis/Models/<variant-directory>/`
+- Root for terminal builds: `~/Library/Application Support/Cantis/Models/<variant-directory>/`. Sandboxed builds resolve Application Support inside the app container through `FileUtilities`; model settings display the actual path.
 - Variant directory names come from `DiTVariant.mlxDirectoryName` (e.g. `ace-step-v1.5-mlx`, `ace-step-v1.5-sft-mlx`).
 - Each variant must contain:
   ```
@@ -230,4 +225,4 @@ Audio files are stored in `~/Library/Application Support/Cantis/Generated/`. The
 
 - The app ships with the App Sandbox enabled (`com.apple.security.app-sandbox` = `true`).
 - Required entitlements: `com.apple.security.network.client` (for HuggingFace downloads), `com.apple.security.files.user-selected.read-write` (for audio import / export panels), `com.apple.security.device.audio-input` (reserved for future capture features).
-- Because there is no Python subprocess, sandbox compatibility is no longer an architectural blocker — Mac App Store distribution is feasible once code signing and packaging are in place. The remaining work is signing, notarization, asset design, and packaging (see `docs/PENDING_PLAN.md`).
+- Because there is no Python subprocess, sandbox compatibility is no longer an architectural blocker — Mac App Store distribution is feasible once code signing and packaging are in place. `Cantis.xcodeproj` provides the app-bundle project alongside the SPM development build. Verify signing, entitlements, and packaging for each release using [the release checklist](RELEASE_CHECKLIST.md); source entitlements alone do not sandbox a terminal-launched executable.
