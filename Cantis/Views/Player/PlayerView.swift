@@ -77,15 +77,13 @@ struct PlayerView: View {
                 }
 
                 SpectrumAnalyzerView(
-                    magnitudes: viewModel.spectrumBins,
-                    isPlaying: viewModel.isPlaying
+                    magnitudes: reduceMotion ? [] : viewModel.spectrumBins,
+                    isPlaying: viewModel.isPlaying && !reduceMotion
                 )
                 .frame(height: 90)
 
-                ViewThatFits(in: .horizontal) {
-                    playbackControls(horizontal: true)
-                    playbackControls(horizontal: false)
-                }
+                playbackControls(horizontal: wideControls)
+                    .animation(reduceMotion ? nil : .smooth(duration: 0.24), value: wideControls)
 
                 if !track.prompt.isEmpty {
                     Divider().overlay(.white.opacity(0.15))
