@@ -1,0 +1,9 @@
+# UI verification · 24 October 2026
+
+Parameters keeps mode, duration and required mode-specific audio/ranges visible. Optional variance, steps, shift, CFG and seed live in Advanced sampling; Turbo uses a concise fixed-CFG summary. Closing the disclosure retains values. The source-defined180ms expansion observes the system Reduce Motion preference. Existing native group boxes, split player, palette and typography remain.
+
+`parameters-collapsed-desktop.png` shows the actual full Mac app with shipped demonstration text in debug-only `--ui-layout-audit` mode: in-memory track store, no MLX startup, model checks or onboarding/downloads. The additional `parameters-component-*` screenshots show the **exact current ParameterControlsView hosted in a temporary native NSHostingView**, clearly labeled as a synthetic component fixture. It uses Extract mode and synthetic seed31415. The temporary host source was restored before committing; no product bootstrap change was made.
+
+Validation: the product Swift build and85 CI-safe tests passed. A native XCUITest on the visible component passed (17.94s): it activated the window, clicked the visible chevron, verified expansion/Variance, edited the seed, collapsed/reopened, confirmed seed retention and confirmed required Reference audio stays outside the disclosure. Window-only screenshots are780×752; whole-desktop diagnostic captures were excluded from this evidence. Normal expansion/reversal completed; exact180ms frame timing was not measured.
+
+The full-app audit window could not be reopened reliably in the automation harness, so interactive verification uses the labeled component host. Native keyboard navigation, OS Reduce Motion switching and the reduced-motion runtime branch remain unverified. This SDK exposes accessibilityReduceMotion as read-only, so no injected preference claim is made. No music generation, audio playback or model download was performed.

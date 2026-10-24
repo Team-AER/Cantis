@@ -66,7 +66,9 @@ struct CantisApp: App {
         // already persisted its first-launch default.
         let storedLowMemory = UserDefaults.standard.object(forKey: "settings.lowMemoryMode") as? Bool
         let lowMemory = storedLowMemory ?? AppConstants.isLowMemoryMachine
-        MLX.Memory.cacheLimit = (lowMemory ? 512 : 1024) * 1024 * 1024
+        if !Self.isLayoutAudit {
+            MLX.Memory.cacheLimit = (lowMemory ? 512 : 1024) * 1024 * 1024
+        }
 
         let engine = NativeInferenceEngine()
         _engine = State(initialValue: engine)
@@ -76,7 +78,8 @@ struct CantisApp: App {
             modelContainer = try ModelContainer(
                 for: GeneratedTrack.self,
                 Preset.self,
-                Tag.self
+                Tag.self,
+                configurations: ModelConfiguration(isStoredInMemoryOnly: Self.isLayoutAudit)
             )
             modelContainerError = nil
         } catch {
@@ -86,6 +89,14 @@ struct CantisApp: App {
         }
 
         AppLogger.shared.info("Cantis launched", category: .app)
+    }
+
+    static var isLayoutAudit: Bool {
+        #if DEBUG
+        ProcessInfo.processInfo.arguments.contains("--ui-layout-audit")
+        #else
+        false
+        #endif
     }
 
     var body: some Scene {

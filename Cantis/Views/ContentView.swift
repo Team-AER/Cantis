@@ -55,6 +55,8 @@ struct ContentView: View {
         .task {
             guard !didBootstrap else { return }
             didBootstrap = true
+            // Debug UI inspection never downloads weights or loads the engine.
+            guard !CantisApp.isLayoutAudit else { return }
 
             let presetService = PresetService(context: modelContext)
             try? presetService.bootstrapFromBundleIfNeeded()
