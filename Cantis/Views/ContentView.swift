@@ -8,6 +8,7 @@ struct ContentView: View {
     @Environment(GenerationViewModel.self) private var generationViewModel
     @Environment(NativeInferenceEngine.self) private var engine
     @Environment(\.modelContext) private var modelContext
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @State private var didBootstrap = false
     @State private var showLowRAMWarning = false
 
@@ -66,7 +67,8 @@ struct ContentView: View {
             await engine.checkStatus()
 
             if AppConstants.isUnderspecMachine,
-               !UserDefaults.standard.bool(forKey: Self.lowRAMWarningDismissedKey) {
+                !UserDefaults.standard.bool(forKey: Self.lowRAMWarningDismissedKey)
+            {
                 showLowRAMWarning = true
             }
         }
@@ -75,7 +77,9 @@ struct ContentView: View {
                 UserDefaults.standard.set(true, forKey: Self.lowRAMWarningDismissedKey)
             }
         } message: {
-            Text("Cantis works best on Macs with 32 GB or more RAM. On this machine generation may swap heavily or fail under load. Low-memory mode is enabled by default — you can adjust it in Settings.")
+            Text(
+                "Cantis works best on Macs with 32 GB or more RAM. On this machine generation may swap heavily or fail under load. Low-memory mode is enabled by default — you can adjust it in Settings."
+            )
         }
     }
 
@@ -84,12 +88,12 @@ struct ContentView: View {
         if let selectedTrack = historyViewModel.selectedTrack ?? generationViewModel.lastTrack {
             PlayerView(track: selectedTrack)
         } else {
-            ContentUnavailableView("No Track Selected", systemImage: "music.note", description: Text("Generate or select a track to preview it."))
+            ArrangementStageView()
         }
     }
 
     private func resolvedPlayerWidth(totalWidth: CGFloat) -> CGFloat {
-        let target = playerPanelWidth ?? (totalWidth / 2)
+        let target = playerPanelWidth ?? (totalWidth * 0.42)
         let maxWidth = max(minPanelWidth, totalWidth - minPanelWidth)
         return max(minPanelWidth, min(maxWidth, target))
     }
@@ -147,7 +151,7 @@ struct ContentView: View {
                 }
                 .onAppear {
                     if playerPanelWidth == nil {
-                        let half = proxy.size.width / 2
+                        let half = proxy.size.width * 0.42
                         playerPanelWidth = half
                         dragStartWidth = half
                     }
@@ -170,7 +174,7 @@ struct ContentView: View {
                                 .symbolEffect(
                                     .pulse,
                                     options: .repeat(.continuous),
-                                    isActive: generationViewModel.state.isBusy
+                                    isActive: generationViewModel.state.isBusy && !reduceMotion
                                 )
                             Text(primaryActionLabel)
                         }
@@ -179,7 +183,9 @@ struct ContentView: View {
                     .tint(primaryActionTint)
                     .keyboardShortcut("g", modifiers: [.command])
                     .disabled(primaryActionDisabled)
-                    .animation(.smooth(duration: 0.3), value: generationViewModel.state.isBusy)
+                    .animation(
+                        reduceMotion ? nil : .smooth(duration: 0.3), value: generationViewModel.state.isBusy
+                    )
                     .accessibilityIdentifier("generate-cancel-button")
                 }
 

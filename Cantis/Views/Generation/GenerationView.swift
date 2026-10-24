@@ -14,15 +14,16 @@ struct GenerationView: View {
 
     var body: some View {
         ScrollView {
-            VStack(alignment: .leading, spacing: 16) {
+            VStack(alignment: .leading, spacing: 20) {
+                arrangementHeading
                 if !engineReady && !engine.isOnboarding && !engine.isGenerating {
                     modelBanner
                 }
 
-                GroupBox("Prompt") {
+                GroupBox("Musical brief") {
                     TextEditor(text: Bindable(viewModel).prompt)
                         .font(.body)
-                        .frame(minHeight: 100)
+                        .frame(minHeight: 120)
                         .accessibilityLabel("Music prompt")
                         .accessibilityIdentifier("prompt-editor")
                 }
@@ -50,6 +51,23 @@ struct GenerationView: View {
             ModelDownloadSheet(variant: variant)
                 .environment(engine)
         }
+    }
+
+    private var arrangementHeading: some View {
+        VStack(alignment: .leading, spacing: 9) {
+            Text("ARRANGEMENT CONSOLE")
+                .font(.caption2.weight(.semibold)).tracking(2)
+                .foregroundStyle(.secondary)
+            Text("Shape a sound.")
+                .font(.system(.largeTitle, design: .rounded, weight: .semibold))
+            HStack(spacing: 12) {
+                Label(viewModel.mode.displayName, systemImage: "pianokeys")
+                Text("\(Int(viewModel.duration)) sec").monospacedDigit()
+                Spacer(minLength: 0)
+            }
+            .font(.caption).foregroundStyle(.secondary)
+        }
+        .padding(.bottom, 4)
     }
 
     // MARK: - Model status banner
