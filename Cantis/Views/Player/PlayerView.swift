@@ -12,6 +12,7 @@ struct PlayerView: View {
 
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
+    @State private var wideControls = false
     @State private var scoreReveal: CGFloat = 1
     @State private var motionEpoch = 0
     @State private var exportError: String? = nil
@@ -94,6 +95,11 @@ struct PlayerView: View {
                 Spacer(minLength: 0)
             }
             .padding(24)
+        }
+        .onGeometryChange(for: Bool.self) { geometry in
+            geometry.size.width >= 560
+        } action: { wide in
+            wideControls = wide
         }
         .foregroundStyle(.white)
         .background(ArrangementStageView.background)
