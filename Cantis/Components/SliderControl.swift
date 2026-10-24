@@ -1,6 +1,7 @@
 import SwiftUI
 
 struct SliderControl: View {
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
     let label: String
     @Binding var value: Double
     let range: ClosedRange<Double>
@@ -28,8 +29,8 @@ struct SliderControl: View {
                     .transition(.opacity)
             }
         }
-        .animation(.easeInOut(duration: 0.15), value: isWarning)
-        .animation(.easeInOut(duration: 0.1), value: value)
+        .animation(reduceMotion ? nil : .easeInOut(duration: 0.15), value: isWarning)
+        .animation(reduceMotion ? nil : .easeInOut(duration: 0.1), value: value)
     }
 
     /// True only when this slider is wired to a memory-impacting threshold and
