@@ -43,7 +43,7 @@ struct ParameterControlsView: View {
                     HStack {
                         Text("Advanced sampling")
                         Spacer()
-                        Text("\(settings.ditVariant.displayName) · \(viewModel.numSteps) steps")
+                        Text("\(samplingVariantName) · \(viewModel.numSteps) steps")
                             .font(.caption)
                             .foregroundStyle(.secondary)
                     }
@@ -69,6 +69,17 @@ struct ParameterControlsView: View {
                 }
 
             }
+        }
+    }
+
+    private var samplingVariantName: String {
+        switch settings.ditVariant {
+        case .turbo: "Turbo"
+        case .sft: "SFT"
+        case .base: "Base"
+        case .xlTurbo: "XL Turbo"
+        case .xlSft: "XL SFT"
+        case .xlBase: "XL Base"
         }
     }
 
