@@ -7,6 +7,8 @@ struct ParameterControlsView: View {
 
     @State private var importingRefer = false
     @State private var importingSource = false
+    @State private var advancedExpanded = false
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
     var body: some View {
         let bindable = Bindable(viewModel)
@@ -21,12 +23,32 @@ struct ParameterControlsView: View {
                               range: 10...600, unit: "sec",
                               warningThreshold: 240,
                               warningMessage: "May use significant RAM beyond 240 sec.")
-                SliderControl(label: "Variance", value: bindable.variance,
-                              range: 0...1, unit: "")
-
-                stepsControl(bindable)
-                shiftPicker(bindable)
-                cfgSlider(bindable)
+                DisclosureGroup(isExpanded: $advancedExpanded) {
+                    VStack(alignment: .leading, spacing: 12) {
+                        SliderControl(label: "Variance", value: bindable.variance,
+                                      range: 0...1, unit: "")
+                        stepsControl(bindable)
+                        shiftPicker(bindable)
+                        if settings.ditVariant.respectsCFG {
+                            cfgSlider(bindable)
+                        } else {
+                            Text("CFG is fixed for Turbo.")
+                                .font(.caption)
+                                .foregroundStyle(.secondary)
+                        }
+                        seedField(bindable)
+                    }
+                    .padding(.top, 8)
+                } label: {
+                    HStack {
+                        Text("Advanced sampling")
+                        Spacer()
+                        Text("\(settings.ditVariant.displayName) · \(viewModel.numSteps) steps")
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                    }
+                }
+                .animation(reduceMotion ? nil : .easeInOut(duration: 0.18), value: advancedExpanded)
 
                 if viewModel.mode.requiresReferAudio {
                     audioPicker(
@@ -46,7 +68,6 @@ struct ParameterControlsView: View {
                     repaintRangeEditor(bindable)
                 }
 
-                seedField(bindable)
             }
         }
     }
