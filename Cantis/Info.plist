@@ -20,11 +20,14 @@
     <key>CFBundleInfoDictionaryVersion</key>
     <string>6.0</string>
 
+    <key>GlitchTipDSN</key>
+    <string>$(GLITCHTIP_DSN)</string>
+
     <!-- Versioning -->
     <key>CFBundleShortVersionString</key>
-    <string>1.0.1</string>
+    <string>$(MARKETING_VERSION)</string>
     <key>CFBundleVersion</key>
-    <string>2</string>
+    <string>$(CURRENT_PROJECT_VERSION)</string>
 
     <!-- macOS -->
     <key>LSMinimumSystemVersion</key>
