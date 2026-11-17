@@ -85,7 +85,7 @@ The Sentry Cocoa SDK provides the configured GlitchTip diagnostics described abo
 
 ## Children's privacy
 
-Cantis is not directed at children under 13 and does not knowingly collect personal information from anyone, including children. The app collects no personal information from any user.
+Cantis is not directed at children under 13 and does not knowingly collect personal information from anyone, including children. Diagnostic reporting follows the limits described above.
 
 ## Your control over your data
 
