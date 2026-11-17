@@ -21,14 +21,22 @@ enum ErrorMonitoring {
             options.enableAppHangTracking = false
             options.enableSwizzling = false
             options.tracesSampleRate = 0
-            options.beforeSend = { event in
-                event.request = nil
-                event.user = nil
-                event.breadcrumbs = nil
-                event.extra = nil
-                for exception in event.exceptions ?? [] { exception.value = exception.type }
-                return event
-            }
+            options.beforeSend = { scrub($0) }
         }
+    }
+
+    static func scrub(_ event: Event) -> Event {
+        event.request = nil
+        event.user = nil
+        event.breadcrumbs = nil
+        event.extra = nil
+        event.context = nil
+        event.message = nil
+        for exception in event.exceptions ?? [] {
+            exception.value = exception.type
+            exception.mechanism?.data = nil
+            exception.mechanism?.desc = nil
+        }
+        return event
     }
 }
