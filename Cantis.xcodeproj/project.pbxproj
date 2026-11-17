@@ -12,6 +12,7 @@
 		AE1100010000000000000003 /* MLXRandom in Frameworks */ = {isa = PBXBuildFile; productRef = AE2200010000000000000003 /* MLXRandom */; };
 		AE1100010000000000000004 /* Collections in Frameworks */ = {isa = PBXBuildFile; productRef = AE2200010000000000000004 /* Collections */; };
 		AE1100010000000000000005 /* Shimmer in Frameworks */ = {isa = PBXBuildFile; productRef = AE2200010000000000000005 /* Shimmer */; };
+		AEB011000000000000000001 /* Sentry in Frameworks */ = {isa = PBXBuildFile; productRef = AEB022000000000000000001 /* Sentry */; };
 /* End PBXBuildFile section */
 
 /* Begin PBXFileReference section */
@@ -45,6 +46,7 @@
 			isa = PBXFrameworksBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
+				AEB011000000000000000001 /* Sentry in Frameworks */,
 				AE1100010000000000000001 /* MLX in Frameworks */,
 				AE1100010000000000000002 /* MLXNN in Frameworks */,
 				AE1100010000000000000003 /* MLXRandom in Frameworks */,
@@ -92,6 +94,7 @@
 			);
 			name = Cantis;
 			packageProductDependencies = (
+				AEB022000000000000000001 /* Sentry */,
 				AE2200010000000000000001 /* MLX */,
 				AE2200010000000000000002 /* MLXNN */,
 				AE2200010000000000000003 /* MLXRandom */,
@@ -127,6 +130,7 @@
 			mainGroup = 1C72634E2FA2955B007D20ED;
 			minimizedProjectReferenceProxies = 1;
 			packageReferences = (
+				AEB033000000000000000001 /* XCRemoteSwiftPackageReference "sentry-cocoa" */,
 				AE3300010000000000000001 /* XCRemoteSwiftPackageReference "mlx-swift" */,
 				AE3300010000000000000002 /* XCRemoteSwiftPackageReference "swift-collections" */,
 				AE3300010000000000000003 /* XCRemoteSwiftPackageReference "SwiftUI-Shimmer" */,
@@ -411,6 +415,11 @@
 				minimumVersion = 1.5.1;
 			};
 		};
+		AEB033000000000000000001 /* XCRemoteSwiftPackageReference "sentry-cocoa" */ = {
+			isa = XCRemoteSwiftPackageReference;
+			repositoryURL = "https://github.com/getsentry/sentry-cocoa.git";
+			requirement = { kind = exactVersion; version = 9.35.0; };
+		};
 /* End XCRemoteSwiftPackageReference section */
 
 /* Begin XCSwiftPackageProductDependency section */
@@ -438,6 +447,11 @@
 			isa = XCSwiftPackageProductDependency;
 			package = AE3300010000000000000003 /* XCRemoteSwiftPackageReference "SwiftUI-Shimmer" */;
 			productName = Shimmer;
+		};
+		AEB022000000000000000001 /* Sentry */ = {
+			isa = XCSwiftPackageProductDependency;
+			package = AEB033000000000000000001 /* XCRemoteSwiftPackageReference "sentry-cocoa" */;
+			productName = Sentry;
 		};
 /* End XCSwiftPackageProductDependency section */
 	};

@@ -10,6 +10,7 @@ let package = Package(
         .executable(name: "Cantis", targets: ["Cantis"])
     ],
     dependencies: [
+        .package(url: "https://github.com/getsentry/sentry-cocoa.git", exact: "9.35.0"),
         .package(url: "https://github.com/apple/swift-collections.git", from: "1.1.0"),
         .package(url: "https://github.com/markiv/SwiftUI-Shimmer.git", from: "1.5.1"),
         .package(url: "https://github.com/ml-explore/mlx-swift", from: "0.21.0")
@@ -18,6 +19,7 @@ let package = Package(
         .executableTarget(
             name: "Cantis",
             dependencies: [
+                .product(name: "Sentry", package: "sentry-cocoa"),
                 .product(name: "Collections", package: "swift-collections"),
                 .product(name: "Shimmer", package: "SwiftUI-Shimmer"),
                 .product(name: "MLX", package: "mlx-swift"),
