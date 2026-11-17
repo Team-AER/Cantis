@@ -57,6 +57,7 @@ struct CantisApp: App {
     private let modelContainerError: Error?
 
     init() {
+        ErrorMonitoring.start()
         // Cap the MLX freed-buffer pool. By default MLX retains every buffer it has
         // allocated for reuse, which makes resident memory grow to the high-water mark
         // of the union of every phase (weight load + DiT activations + VAE decode) and
