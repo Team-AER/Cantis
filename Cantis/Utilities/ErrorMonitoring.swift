@@ -10,7 +10,9 @@ enum ErrorMonitoring {
         SentrySDK.start { options in
             options.dsn = dsn
             options.environment = environment["SENTRY_ENVIRONMENT"] ?? "production"
-            options.releaseName = environment["SENTRY_RELEASE"] ?? "cantis@0.1.0"
+            if let release = environment["SENTRY_RELEASE"], !release.isEmpty {
+                options.releaseName = release
+            }
             options.sendDefaultPii = false
             options.enableAutoSessionTracking = false
             options.enableAutoPerformanceTracing = false
